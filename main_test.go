@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 )
@@ -229,6 +231,71 @@ func TestRemoveRepoRemovesByIdentifier(t *testing.T) {
 	}
 }
 
+func TestParsePushArgs(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "positional", args: []string{"ship", "changes"}, want: "ship changes"},
+		{name: "short message flag", args: []string{"-m", "ship changes"}, want: "ship changes"},
+		{name: "long message flag", args: []string{"--message", "ship changes"}, want: "ship changes"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := parsePushArgs(tc.args)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tc.want {
+				t.Fatalf("message = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestParsePushArgsRejectsMissingMessage(t *testing.T) {
+	if _, err := parsePushArgs(nil); err == nil {
+		t.Fatal("expected missing message error")
+	}
+	if _, err := parsePushArgs([]string{"--message", "  "}); err == nil {
+		t.Fatal("expected empty message error")
+	}
+}
+
+func TestPushRepoCommitsAndPushesChanges(t *testing.T) {
+	dir := t.TempDir()
+	remote := filepath.Join(dir, "remote.git")
+	seed := filepath.Join(dir, "seed")
+	repoPath := filepath.Join(dir, "repo")
+
+	runTestGit(t, dir, "init", "--bare", remote)
+	runTestGit(t, dir, "init", "-b", "main", seed)
+	configureTestGitUser(t, seed)
+	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte("initial\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runTestGit(t, seed, "add", "-A")
+	runTestGit(t, seed, "commit", "-m", "initial")
+	runTestGit(t, seed, "remote", "add", "origin", remote)
+	runTestGit(t, seed, "push", "-u", "origin", "main")
+
+	runTestGit(t, dir, "clone", remote, repoPath)
+	configureTestGitUser(t, repoPath)
+	if err := os.WriteFile(filepath.Join(repoPath, "feature.txt"), []byte("feature\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	repo := Repo{Name: "repo", Path: repoPath}
+	if err := pushRepo(repo, "common message", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	got := runTestGitOutput(t, remote, "log", "--format=%s", "-1")
+	if got != "common message" {
+		t.Fatalf("remote subject = %q, want %q", got, "common message")
+	}
+}
+
 func newTestProject(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
@@ -242,6 +309,33 @@ func newTestProject(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return root
+}
+
+func configureTestGitUser(t *testing.T, dir string) {
+	t.Helper()
+	runTestGit(t, dir, "config", "user.email", "uppr@example.test")
+	runTestGit(t, dir, "config", "user.name", "uppr test")
+}
+
+func runTestGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, output)
+	}
+}
+
+func runTestGitOutput(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	output, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git %v: %v", args, err)
+	}
+	return string(bytes.TrimSpace(output))
 }
 
 func writeTestRepos(t *testing.T, root string, repos []Repo) {

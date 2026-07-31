@@ -48,6 +48,8 @@ func run(args []string) error {
 		return removeRepo(args[1:])
 	case "pull":
 		return pullRepos()
+	case "push":
+		return pushRepos(args[1:])
 	case "help", "-h", "--help":
 		printUsage()
 		return nil
@@ -65,11 +67,15 @@ Usage:
   uppr list                       list configured repos
   uppr remove <name|url|path>     remove a repo from repos.conf
   uppr pull                       clone missing repos and pull existing repos
+  uppr push <message>             commit changes in each repo and push
 
 Add options:
   --name <name>
   --path <path>
   --branch <branch>
+
+Push options:
+  -m, --message <message>
 
 repos.conf format:
   [repo]
@@ -313,6 +319,71 @@ func pullRepos() error {
 	return nil
 }
 
+func pushRepos(args []string) error {
+	message, err := parsePushArgs(args)
+	if err != nil {
+		return err
+	}
+
+	root, err := findProjectRoot(".")
+	if err != nil {
+		return err
+	}
+
+	env, err := readDotEnv(filepath.Join(root, envFile))
+	if err != nil {
+		return err
+	}
+
+	repos, err := readRepos(filepath.Join(root, reposFile))
+	if err != nil {
+		return err
+	}
+	if len(repos) == 0 {
+		return fmt.Errorf("%s does not contain any repos", filepath.Join(root, reposFile))
+	}
+	resolveRepoPaths(root, repos)
+
+	askPass, cleanup, err := makeAskPass(env["GITHUB_USERNAME"], env["GITHUB_PASSWORD"])
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	var failed bool
+	for _, repo := range repos {
+		if err := pushRepo(repo, message, askPass); err != nil {
+			failed = true
+			fmt.Fprintf(os.Stderr, "%s: %v\n", repoLabel(repo), err)
+		}
+	}
+	if failed {
+		return errors.New("one or more repos failed")
+	}
+	return nil
+}
+
+func parsePushArgs(args []string) (string, error) {
+	if len(args) == 0 {
+		return "", errors.New("usage: uppr push <message>")
+	}
+	if len(args) == 2 && (args[0] == "-m" || args[0] == "--message") {
+		message := strings.TrimSpace(args[1])
+		if message == "" {
+			return "", errors.New("commit message cannot be empty")
+		}
+		return message, nil
+	}
+	if strings.HasPrefix(args[0], "-") {
+		return "", fmt.Errorf("unknown push option %q", args[0])
+	}
+	message := strings.TrimSpace(strings.Join(args, " "))
+	if message == "" {
+		return "", errors.New("commit message cannot be empty")
+	}
+	return message, nil
+}
+
 func findProjectRoot(start string) (string, error) {
 	dir, err := filepath.Abs(start)
 	if err != nil {
@@ -480,6 +551,49 @@ func pullRepo(repo Repo, askPass string) error {
 	}
 	args = append(args, repo.URL, repo.Path)
 	return runGit(askPass, args...)
+}
+
+func pushRepo(repo Repo, message, askPass string) error {
+	label := repoLabel(repo)
+	if _, err := os.Stat(filepath.Join(repo.Path, ".git")); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("%s is not a git repository; run `uppr pull` first", repo.Path)
+		}
+		return err
+	}
+
+	fmt.Printf("[%s] git add -A\n", label)
+	if err := runGit(askPass, "-C", repo.Path, "add", "-A"); err != nil {
+		return err
+	}
+
+	hasChanges, err := hasStagedChanges(repo.Path, askPass)
+	if err != nil {
+		return err
+	}
+	if hasChanges {
+		fmt.Printf("[%s] git commit\n", label)
+		if err := runGit(askPass, "-C", repo.Path, "commit", "-m", message); err != nil {
+			return err
+		}
+	} else {
+		fmt.Printf("[%s] no changes to commit\n", label)
+	}
+
+	fmt.Printf("[%s] git push\n", label)
+	return runGit(askPass, "-C", repo.Path, "push")
+}
+
+func hasStagedChanges(path, askPass string) (bool, error) {
+	err := runGit(askPass, "-C", path, "diff", "--cached", "--quiet")
+	if err == nil {
+		return false, nil
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+		return true, nil
+	}
+	return false, err
 }
 
 func repoLabel(repo Repo) string {

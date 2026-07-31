@@ -73,3 +73,17 @@ url = https://github.com/phillip-england/some-repo
 path = apps/some-repo
 branch = main
 ```
+
+## Push repos
+
+```sh
+./uppr push "common commit message"
+./uppr push -m "common commit message"
+```
+
+`uppr push` stages all changes in each configured repo, commits repos that have
+staged changes with the shared message, and then runs:
+
+```sh
+git -C <path> push
+```
