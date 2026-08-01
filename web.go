@@ -27,6 +27,8 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+const defaultWebAddr = "127.0.0.1:9944"
+
 func serveWeb(args []string) error {
 	if len(args) > 1 {
 		return errors.New("usage: uppr web [path]")
@@ -44,7 +46,7 @@ func serveWeb(args []string) error {
 		return err
 	}
 
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	listener, err := net.Listen("tcp", defaultWebAddr)
 	if err != nil {
 		return err
 	}
@@ -71,7 +73,7 @@ func serveServer(args []string) error {
 		return err
 	}
 	if fs.NArg() > 1 {
-		return errors.New("usage: uppr serve [path] [--addr 0.0.0.0:8787]")
+		return errors.New("usage: uppr serve [path] [--addr 0.0.0.0:9944]")
 	}
 	root := "."
 	if fs.NArg() == 1 {

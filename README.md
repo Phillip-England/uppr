@@ -33,6 +33,8 @@ Or open a local web UI for the project:
 ./uppr web .
 ```
 
+The local web UI listens on `http://127.0.0.1:9944`.
+
 From the web UI, open a repository to edit its config, run git actions, and use
 the embedded browser shell in that repository's configured path.
 
@@ -40,7 +42,7 @@ For server deployment, run the authenticated web UI from the Uppr installation
 root:
 
 ```sh
-./uppr serve --addr 0.0.0.0:8787 .
+./uppr serve --addr 0.0.0.0:9944 .
 ```
 
 On first login, create a workspace from the Workspaces page. Uppr stores the
@@ -71,7 +73,7 @@ Change `ADMIN_PASSWORD` before exposing the app behind Caddy. Login failures are
 tracked by client IP for a 24 hour window and old rows are purged during login
 checks, so the tracking table does not grow indefinitely.
 
-The included `Dockerfile` exposes port `8787` and starts:
+The included `Dockerfile` exposes port `9944` and starts:
 
 ```sh
 uppr serve --addr 0.0.0.0:${PORT} .

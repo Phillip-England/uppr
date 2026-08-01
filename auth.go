@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	defaultAddr       = ":8787"
+	defaultAddr       = ":9944"
 	defaultDBPath     = "data/main.sqlite"
 	sessionCookieName = "uppr_session"
 	sessionTTL        = 12 * time.Hour
@@ -54,7 +54,7 @@ func defaultEnvContents() []byte {
 		"ADMIN_USERNAME=admin",
 		"ADMIN_PASSWORD=change-me-now",
 		"SESSION_SECRET=" + secret,
-		"ADDR=:8787",
+		"ADDR=:9944",
 		"",
 	}, "\n"))
 }

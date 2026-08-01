@@ -16,7 +16,7 @@ RUN apt-get update \
 
 COPY --from=build /usr/local/bin/uppr /usr/local/bin/uppr
 
-ENV PORT=8787
-EXPOSE 8787
+ENV PORT=9944
+EXPOSE 9944
 
 CMD ["sh", "-c", "exec uppr serve --addr 0.0.0.0:${PORT} ."]
