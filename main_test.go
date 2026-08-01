@@ -92,6 +92,29 @@ func TestReadDotEnv(t *testing.T) {
 	}
 }
 
+func TestEnsureEnvDefaultsMigratesLegacyServeAddr(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, envFile)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("ADMIN_USERNAME=admin\nADMIN_PASSWORD=secret\nSESSION_SECRET=secret\nADDR=:8787\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ensureEnvDefaults(path); err != nil {
+		t.Fatal(err)
+	}
+
+	values, err := readDotEnv(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if values["ADDR"] != defaultAddr {
+		t.Fatalf("ADDR = %q, want %q", values["ADDR"], defaultAddr)
+	}
+}
+
 func TestReadReposDefaultsNameAndPath(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "repos.conf")

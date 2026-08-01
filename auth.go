@@ -19,6 +19,7 @@ import (
 
 const (
 	defaultAddr       = ":9944"
+	legacyDefaultAddr = ":8787"
 	defaultDBPath     = "data/main.sqlite"
 	sessionCookieName = "uppr_session"
 	sessionTTL        = 12 * time.Hour
@@ -91,6 +92,9 @@ func ensureEnvDefaults(path string) error {
 		ordered = append(ordered, "SESSION_SECRET")
 	}
 	if _, ok := values["ADDR"]; !ok {
+		defaults["ADDR"] = defaultAddr
+		ordered = append(ordered, "ADDR")
+	} else if normalizeListenAddr(values["ADDR"]) == legacyDefaultAddr {
 		defaults["ADDR"] = defaultAddr
 		ordered = append(ordered, "ADDR")
 	}
