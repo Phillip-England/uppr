@@ -2,9 +2,14 @@ package main
 
 import (
 	"bytes"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -183,8 +188,262 @@ func TestAddRepoWritesReposConf(t *testing.T) {
 	if len(repos) != 1 {
 		t.Fatalf("len(repos) = %d", len(repos))
 	}
-	if repos[0] != (Repo{Name: "api", URL: "https://github.com/acme/service", Path: "services/api", Branch: "main"}) {
+	if !reflect.DeepEqual(repos[0], Repo{Name: "api", URL: "https://github.com/acme/service", Path: "services/api", Branch: "main", RateLimit: defaultRateLimit()}) {
 		t.Fatalf("repo = %#v", repos[0])
+	}
+}
+
+func TestReadReposSupportsRuntimeSettings(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "repos.conf")
+	contents := []byte(`[repo]
+name = api
+url = https://github.com/acme/api
+path = apps/api
+port = 8080
+container_port = 3000
+domain = api.localhost
+domain = www.api.localhost
+rate_limit_enabled = true
+rate_limit_zone = clients
+rate_limit_events = 25
+rate_limit_window = 30s
+env = NODE_ENV=production
+env = DATABASE_URL=postgres://db/app
+volume = ./data/api:/app/data
+`)
+	if err := os.WriteFile(path, contents, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	repos, err := readRepos(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := repos[0]
+	if got.Port != 8080 || got.ContainerPort != 3000 || got.Domain != "api.localhost" {
+		t.Fatalf("runtime settings = %#v", got)
+	}
+	if !reflect.DeepEqual(got.Domains, []string{"api.localhost", "www.api.localhost"}) {
+		t.Fatalf("domains = %#v", got.Domains)
+	}
+	if !reflect.DeepEqual(got.RateLimit, RateLimit{Enabled: true, Zone: "clients", Events: 25, Window: "30s"}) {
+		t.Fatalf("rate limit = %#v", got.RateLimit)
+	}
+	if !reflect.DeepEqual(got.Env, []string{"NODE_ENV=production", "DATABASE_URL=postgres://db/app"}) {
+		t.Fatalf("env = %#v", got.Env)
+	}
+	if !reflect.DeepEqual(got.Volumes, []string{"./data/api:/app/data"}) {
+		t.Fatalf("volumes = %#v", got.Volumes)
+	}
+}
+
+func TestGenerateProjectFilesAt(t *testing.T) {
+	root := newTestProject(t)
+	writeTestRepos(t, root, []Repo{{
+		Name:          "api",
+		URL:           "https://github.com/acme/api",
+		Path:          "apps/api",
+		Port:          8080,
+		ContainerPort: 3000,
+		Domain:        "api.localhost",
+		Domains:       []string{"api.localhost", "www.api.localhost"},
+		RateLimit:     RateLimit{Enabled: true, Zone: "clients", Events: 25, Window: "30s"},
+		Env:           []string{"NODE_ENV=production"},
+		Volumes:       []string{"./data/api:/app/data", "./cache/api:/app/cache"},
+	}})
+
+	if err := generateProjectFilesAt(root); err != nil {
+		t.Fatal(err)
+	}
+
+	compose := readTestFile(t, filepath.Join(root, dockerComposeFile))
+	caddy := readTestFile(t, filepath.Join(root, caddyFile))
+	caddyDocker := readTestFile(t, filepath.Join(root, caddyDockerFile))
+	makefile := readTestFile(t, filepath.Join(root, makeFile))
+	for _, want := range []string{
+		"    build:",
+		"      dockerfile: caddyx.Dockerfile",
+		"    image: uppr-caddyx:latest",
+		"  api:",
+		"      context: ./apps/api",
+		"    env_file:",
+		"      - ./apps/api/config/.env",
+		"      - \"8080:3000\"",
+		"      NODE_ENV: \"production\"",
+		"      - \"./apps/api/config:/app/config\"",
+		"      - \"./apps/api/data:/app/data\"",
+		"      - \"./cache/api:/app/cache\"",
+	} {
+		if !strings.Contains(compose, want) {
+			t.Fatalf("compose missing %q:\n%s", want, compose)
+		}
+	}
+	if strings.Contains(compose, "\"./data/api:/app/data\"") {
+		t.Fatalf("compose should protect /app/data from custom mounts:\n%s", compose)
+	}
+	for _, want := range []string{
+		"api.localhost www.api.localhost {",
+		"rate_limit {",
+		"zone clients {",
+		"events 25",
+		"window 30s",
+		"reverse_proxy api:3000",
+	} {
+		if !strings.Contains(caddy, want) {
+			t.Fatalf("Caddyfile missing %q:\n%s", want, caddy)
+		}
+	}
+	if !strings.Contains(caddyDocker, "github.com/mholt/caddy-ratelimit@latest") {
+		t.Fatalf("unexpected caddyx Dockerfile:\n%s", caddyDocker)
+	}
+	if strings.Contains(caddy, "caddy:2-alpine") {
+		t.Fatalf("unexpected Caddyfile:\n%s", caddy)
+	}
+	if !strings.Contains(makefile, "launch: generate") {
+		t.Fatalf("unexpected Makefile:\n%s", makefile)
+	}
+}
+
+func TestGenerateProjectFilesUsesDockerfileExposeForContainerPort(t *testing.T) {
+	root := newTestProject(t)
+	repoPath := filepath.Join(root, "apps", "api")
+	if err := os.MkdirAll(repoPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repoPath, "Dockerfile"), []byte("FROM alpine\nEXPOSE 3000/tcp 9000\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeTestRepos(t, root, []Repo{{
+		Name:   "api",
+		URL:    "https://github.com/acme/api",
+		Path:   "apps/api",
+		Port:   8080,
+		Domain: "api.localhost",
+	}})
+
+	if err := generateProjectFilesAt(root); err != nil {
+		t.Fatal(err)
+	}
+
+	compose := readTestFile(t, filepath.Join(root, dockerComposeFile))
+	caddy := readTestFile(t, filepath.Join(root, caddyFile))
+	if !strings.Contains(compose, `      - "8080:3000"`) {
+		t.Fatalf("compose should use exposed container port:\n%s", compose)
+	}
+	if !strings.Contains(caddy, "reverse_proxy api:3000") {
+		t.Fatalf("Caddyfile should use exposed container port:\n%s", caddy)
+	}
+}
+
+func TestConfigureRepoContainerPortFromDockerfileWritesMissingPort(t *testing.T) {
+	root := newTestProject(t)
+	repoPath := filepath.Join(root, "apps", "api")
+	if err := os.MkdirAll(repoPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repoPath, "Dockerfile"), []byte("FROM alpine\n# ignored\nEXPOSE 4321 # app\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeTestRepos(t, root, []Repo{{
+		Name: "api",
+		URL:  "https://github.com/acme/api",
+		Path: "apps/api",
+	}})
+
+	if err := configureRepoContainerPortFromDockerfile(root, 0); err != nil {
+		t.Fatal(err)
+	}
+
+	repos, err := readRepos(filepath.Join(root, reposFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repos[0].ContainerPort != 4321 {
+		t.Fatalf("container port = %d, want 4321", repos[0].ContainerPort)
+	}
+	if repos[0].Path != "apps/api" {
+		t.Fatalf("path should remain relative, got %q", repos[0].Path)
+	}
+}
+
+func TestReadDockerfileExposedPortIgnoresDynamicPort(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "Dockerfile")
+	if err := os.WriteFile(path, []byte("FROM alpine\nEXPOSE ${PORT}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	port, err := readDockerfileExposedPort(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if port != 0 {
+		t.Fatalf("port = %d, want 0", port)
+	}
+}
+
+func TestPrepareRepoEnvCreatesConfigEnvFromSchema(t *testing.T) {
+	root := t.TempDir()
+	repoPath := filepath.Join(root, "apps", "api")
+	if err := os.MkdirAll(repoPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repoPath, envSchemaFile), []byte("# required by api\nAPI_KEY\nDATABASE_URL\nAPI_KEY\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := prepareRepoEnv(Repo{Name: "api", Path: repoPath}); err != nil {
+		t.Fatal(err)
+	}
+
+	env := readTestFile(t, filepath.Join(repoPath, envFile))
+	if env != "API_KEY=\nDATABASE_URL=\n" {
+		t.Fatalf("env = %q", env)
+	}
+	if info, err := os.Stat(filepath.Join(repoPath, "data")); err != nil || !info.IsDir() {
+		t.Fatalf("expected data directory: %v", err)
+	}
+}
+
+func TestPrepareRepoEnvPreservesExistingValues(t *testing.T) {
+	root := t.TempDir()
+	repoPath := filepath.Join(root, "apps", "api")
+	if err := os.MkdirAll(filepath.Join(repoPath, "config"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repoPath, envSchemaFile), []byte("API_KEY\nDATABASE_URL\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	existing := "# local values\nAPI_KEY=secret\n"
+	if err := os.WriteFile(filepath.Join(repoPath, envFile), []byte(existing), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := prepareRepoEnv(Repo{Name: "api", Path: repoPath}); err != nil {
+		t.Fatal(err)
+	}
+
+	env := readTestFile(t, filepath.Join(repoPath, envFile))
+	want := existing + "DATABASE_URL=\n"
+	if env != want {
+		t.Fatalf("env = %q, want %q", env, want)
+	}
+}
+
+func TestReadEnvSchemaRejectsValues(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, envSchemaFile)
+	if err := os.WriteFile(path, []byte("API_KEY=secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := readEnvSchema(path)
+	if err == nil {
+		t.Fatal("expected schema error")
+	}
+	if !strings.Contains(err.Error(), "without a value") {
+		t.Fatalf("error = %v", err)
 	}
 }
 
@@ -296,6 +555,590 @@ func TestPushRepoCommitsAndPushesChanges(t *testing.T) {
 	}
 }
 
+func TestWebAddRepoRedirectsToReposPage(t *testing.T) {
+	root := newTestProject(t)
+	app := &webApp{root: root}
+
+	form := url.Values{
+		"github_owner": {"acme"},
+		"github_repo":  {"api"},
+		"branch":       {"main"},
+	}
+	response := postWebForm(t, app, "/repos", form)
+
+	if response.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusSeeOther)
+	}
+	if location := response.Header().Get("Location"); location != "/repos?message=repo+added" {
+		t.Fatalf("location = %q", location)
+	}
+	repos, err := readRepos(filepath.Join(root, reposFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(repos) != 1 {
+		t.Fatalf("repos = %#v", repos)
+	}
+	if repos[0].Name != "api" {
+		t.Fatalf("name = %q", repos[0].Name)
+	}
+	if repos[0].URL != "https://github.com/acme/api" {
+		t.Fatalf("url = %q", repos[0].URL)
+	}
+	if repos[0].Path != filepath.Join("apps", "api") {
+		t.Fatalf("path = %q", repos[0].Path)
+	}
+}
+
+func TestWebSaveRepoAllowsUpdatingOriginalRepo(t *testing.T) {
+	root := newTestProject(t)
+	writeTestRepos(t, root, []Repo{
+		{Name: "api", URL: "https://github.com/acme/api", Path: "apps/api"},
+		{Name: "web", URL: "https://github.com/acme/web", Path: "apps/web"},
+	})
+	app := &webApp{root: root}
+
+	form := url.Values{
+		"url":                {"https://github.com/acme/api"},
+		"name":               {"api"},
+		"path":               {"apps/api"},
+		"branch":             {"main"},
+		"port":               {"8080"},
+		"container_port":     {"3000"},
+		"domains":            {"api.localhost\nwww.api.localhost"},
+		"rate_limit_enabled": {"true"},
+		"rate_limit_zone":    {"clients"},
+		"rate_limit_events":  {"50"},
+		"rate_limit_window":  {"10s"},
+		"env":                {"NODE_ENV=production\nDATABASE_URL=postgres://db/app"},
+		"volumes":            {"./data/api:/app/data"},
+	}
+	response := postWebForm(t, app, "/repos/0/save", form)
+
+	if response.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusSeeOther)
+	}
+	repos, err := readRepos(filepath.Join(root, reposFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repos[0].Branch != "main" || repos[0].Port != 8080 || repos[0].ContainerPort != 3000 {
+		t.Fatalf("updated repo = %#v", repos[0])
+	}
+	if !reflect.DeepEqual(repos[0].Domains, []string{"api.localhost", "www.api.localhost"}) {
+		t.Fatalf("domains = %#v", repos[0].Domains)
+	}
+	if !reflect.DeepEqual(repos[0].RateLimit, RateLimit{Enabled: true, Zone: "clients", Events: 50, Window: "10s"}) {
+		t.Fatalf("rate limit = %#v", repos[0].RateLimit)
+	}
+	if !reflect.DeepEqual(repos[0].Env, []string{"NODE_ENV=production", "DATABASE_URL=postgres://db/app"}) {
+		t.Fatalf("env = %#v", repos[0].Env)
+	}
+	if repos[1].Name != "web" {
+		t.Fatalf("second repo = %#v", repos[1])
+	}
+}
+
+func TestWebDeleteRepoRemovesOnlySelectedRepo(t *testing.T) {
+	root := newTestProject(t)
+	writeTestRepos(t, root, []Repo{
+		{Name: "api", URL: "https://github.com/acme/api", Path: "apps/api"},
+		{Name: "web", URL: "https://github.com/acme/web", Path: "apps/web"},
+	})
+	app := &webApp{root: root}
+
+	response := postWebForm(t, app, "/repos/0/delete", nil)
+
+	if response.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusSeeOther)
+	}
+	repos, err := readRepos(filepath.Join(root, reposFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(repos) != 1 || repos[0].Name != "web" {
+		t.Fatalf("repos = %#v", repos)
+	}
+}
+
+func TestWebIndexRedirectsToRepos(t *testing.T) {
+	root := newTestProject(t)
+	app := &webApp{root: root}
+
+	response := getWeb(t, app, "/")
+
+	if response.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusSeeOther)
+	}
+	if location := response.Header().Get("Location"); location != "/repos" {
+		t.Fatalf("location = %q", location)
+	}
+}
+
+func TestWebFilesPageLinksProjectFiles(t *testing.T) {
+	root := newTestProject(t)
+	app := &webApp{root: root}
+
+	response := getWeb(t, app, "/files")
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
+	}
+	body := response.Body.String()
+	for _, want := range []string{
+		`href="/files/repos"`,
+		`href="/files/env"`,
+		`href="/files/makefile"`,
+		`href="/files/docker-compose"`,
+		`href="/files/caddy-dockerfile"`,
+		`href="/files/caddyfile"`,
+		`data-shell-url="/files/shell"`,
+		`Project Terminal`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("index missing %q:\n%s", want, body)
+		}
+	}
+}
+
+func TestWebReposPageShowsRepoActions(t *testing.T) {
+	root := newTestProject(t)
+	writeTestRepos(t, root, []Repo{
+		{Name: "api", URL: "https://github.com/acme/api", Path: "apps/api", Branch: "main"},
+	})
+	app := &webApp{root: root}
+
+	response := getWeb(t, app, "/repos")
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
+	}
+	body := response.Body.String()
+	for _, want := range []string{
+		`action="/repos/0/pull"`,
+		`href="/repos/0"`,
+		`api`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("repos page missing %q:\n%s", want, body)
+		}
+	}
+}
+
+func TestRepoShellPathUsesResolvedRepoPath(t *testing.T) {
+	root := newTestProject(t)
+	repoPath := filepath.Join(root, "apps", "api")
+	if err := os.MkdirAll(repoPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeTestRepos(t, root, []Repo{
+		{Name: "api", URL: "https://github.com/acme/api", Path: filepath.Join("apps", "api")},
+	})
+
+	path, err := repoShellPath(root, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if path != repoPath {
+		t.Fatalf("path = %q, want %q", path, repoPath)
+	}
+}
+
+func TestRepoShellPathRejectsMissingRepoPath(t *testing.T) {
+	root := newTestProject(t)
+	writeTestRepos(t, root, []Repo{
+		{Name: "api", URL: "https://github.com/acme/api", Path: filepath.Join("apps", "api")},
+	})
+
+	_, err := repoShellPath(root, 0)
+	if err == nil {
+		t.Fatal("expected missing path error")
+	}
+	if !strings.Contains(err.Error(), "pull the repository first") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestWebRepoRendersEmbeddedBrowserShell(t *testing.T) {
+	root := newTestProject(t)
+	if err := os.MkdirAll(filepath.Join(root, "apps", "api"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeTestRepos(t, root, []Repo{
+		{Name: "api", URL: "https://github.com/acme/api", Path: filepath.Join("apps", "api")},
+	})
+	app := &webApp{root: root}
+
+	response := getWeb(t, app, "/repos/0")
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
+	}
+	body := response.Body.String()
+	for _, want := range []string{
+		`data-shell-url="/repos/0/shell"`,
+		`Browser shell`,
+		`name="domains"`,
+		`name="rate_limit_enabled"`,
+		`name="rate_limit_events" value="100"`,
+		`apps/api`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("repo page missing shell %q:\n%s", want, body)
+		}
+	}
+}
+
+func TestWebRepoRendersSchemaEnvFields(t *testing.T) {
+	root := newTestProject(t)
+	repoPath := filepath.Join(root, "apps", "api")
+	if err := os.MkdirAll(filepath.Join(repoPath, "config"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repoPath, envSchemaFile), []byte("API_KEY\nDATABASE_URL\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repoPath, envFile), []byte("API_KEY=secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeTestRepos(t, root, []Repo{
+		{Name: "api", URL: "https://github.com/acme/api", Path: filepath.Join("apps", "api")},
+	})
+	app := &webApp{root: root}
+
+	response := getWeb(t, app, "/repos/0")
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
+	}
+	body := response.Body.String()
+	for _, want := range []string{
+		`name="app_env_key" value="API_KEY"`,
+		`id="app-env-API_KEY" name="app_env_value" value="secret"`,
+		`name="app_env_key" value="DATABASE_URL"`,
+		`terminal terminal--compact`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("repo page missing env field %q:\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, `id="repo-env"`) {
+		t.Fatalf("repo page should not render env textarea:\n%s", body)
+	}
+}
+
+func TestWebSaveRepoWritesSchemaEnvFile(t *testing.T) {
+	root := newTestProject(t)
+	repoPath := filepath.Join(root, "apps", "api")
+	if err := os.MkdirAll(filepath.Join(repoPath, "config"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repoPath, envSchemaFile), []byte("API_KEY\nDATABASE_URL\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repoPath, envFile), []byte("# keep\nAPI_KEY=old\nOTHER=value\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeTestRepos(t, root, []Repo{
+		{Name: "api", URL: "https://github.com/acme/api", Path: filepath.Join("apps", "api"), Env: []string{"NODE_ENV=production"}},
+	})
+	app := &webApp{root: root}
+
+	response := postWebForm(t, app, "/repos/0/save", url.Values{
+		"url":           {"https://github.com/acme/api"},
+		"name":          {"api"},
+		"path":          {filepath.Join("apps", "api")},
+		"env":           {"NODE_ENV=production"},
+		"app_env_key":   {"API_KEY", "DATABASE_URL"},
+		"app_env_value": {"new secret", "postgres://db/app"},
+	})
+
+	if response.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusSeeOther)
+	}
+	env := readTestFile(t, filepath.Join(repoPath, envFile))
+	for _, want := range []string{
+		"# keep",
+		`API_KEY="new secret"`,
+		"OTHER=value",
+		"DATABASE_URL=postgres://db/app",
+	} {
+		if !strings.Contains(env, want) {
+			t.Fatalf("env file missing %q:\n%s", want, env)
+		}
+	}
+	repos, err := readRepos(filepath.Join(root, reposFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(repos[0].Env, []string{"NODE_ENV=production"}) {
+		t.Fatalf("repo env = %#v", repos[0].Env)
+	}
+}
+
+func TestWebRepoShellRunsCommandInRepoPath(t *testing.T) {
+	root := newTestProject(t)
+	repoPath := filepath.Join(root, "apps", "api")
+	if err := os.MkdirAll(repoPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repoPath, "README.md"), []byte("hello\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeTestRepos(t, root, []Repo{
+		{Name: "api", URL: "https://github.com/acme/api", Path: filepath.Join("apps", "api")},
+	})
+	app := &webApp{root: root}
+
+	response := postWebForm(t, app, "/repos/0/shell", url.Values{
+		"command": {"pwd && ls"},
+	})
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
+	}
+	body := response.Body.String()
+	if !strings.Contains(body, repoPath) || !strings.Contains(body, "README.md") {
+		t.Fatalf("unexpected shell response:\n%s", body)
+	}
+}
+
+func TestWebReposPageLinksCredentials(t *testing.T) {
+	root := newTestProject(t)
+	app := &webApp{root: root}
+
+	response := getWeb(t, app, "/repos")
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
+	}
+	if body := response.Body.String(); !strings.Contains(body, `href="/credentials"`) {
+		t.Fatalf("repos page missing credentials link:\n%s", body)
+	}
+}
+
+func TestWebCredentialsPageShowsCurrentUsername(t *testing.T) {
+	root := newTestProject(t)
+	if err := os.WriteFile(filepath.Join(root, envFile), []byte("GITHUB_USERNAME=octo\nGITHUB_PASSWORD=secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	app := &webApp{root: root}
+
+	response := getWeb(t, app, "/credentials")
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
+	}
+	body := response.Body.String()
+	if !strings.Contains(body, `value="octo"`) || !strings.Contains(body, `name="password"`) {
+		t.Fatalf("unexpected credentials page:\n%s", body)
+	}
+}
+
+func TestWebCredentialsSaveWritesEnvFile(t *testing.T) {
+	root := newTestProject(t)
+	if err := os.WriteFile(filepath.Join(root, envFile), []byte("# keep me\nOTHER=value\nGITHUB_USERNAME=old\nGITHUB_PASSWORD=old\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	app := &webApp{root: root}
+
+	response := postWebForm(t, app, "/credentials", url.Values{
+		"username": {"octo"},
+		"password": {"token value"},
+	})
+
+	if response.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusSeeOther)
+	}
+	if location := response.Header().Get("Location"); location != "/credentials?message=credentials+saved" {
+		t.Fatalf("location = %q", location)
+	}
+	contents := readTestFile(t, filepath.Join(root, envFile))
+	for _, want := range []string{
+		"# keep me",
+		"OTHER=value",
+		"GITHUB_USERNAME=octo",
+		`GITHUB_PASSWORD="token value"`,
+	} {
+		if !strings.Contains(contents, want) {
+			t.Fatalf("env file missing %q:\n%s", want, contents)
+		}
+	}
+}
+
+func TestWebSyncPageHasBulkControls(t *testing.T) {
+	root := newTestProject(t)
+	writeTestRepos(t, root, []Repo{
+		{Name: "api", URL: "https://github.com/acme/api", Path: "apps/api"},
+	})
+	app := &webApp{root: root}
+
+	response := getWeb(t, app, "/sync")
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
+	}
+	body := response.Body.String()
+	for _, want := range []string{
+		`action="/sync/pull"`,
+		`action="/sync/push"`,
+		`name="message"`,
+		`General Commit Message`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("sync page missing %q:\n%s", want, body)
+		}
+	}
+}
+
+func TestWebFileShowsWhitelistedProjectFile(t *testing.T) {
+	root := newTestProject(t)
+	if err := os.WriteFile(filepath.Join(root, makeFile), []byte("launch:\n\tdocker compose up\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	app := &webApp{root: root}
+
+	response := getWeb(t, app, "/files/makefile")
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
+	}
+	body := response.Body.String()
+	if !strings.Contains(body, "Makefile") || !strings.Contains(body, "docker compose up") {
+		t.Fatalf("unexpected file page:\n%s", body)
+	}
+}
+
+func TestWebFileShowsMissingGeneratedFile(t *testing.T) {
+	root := newTestProject(t)
+	app := &webApp{root: root}
+
+	response := getWeb(t, app, "/files/caddyfile")
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
+	}
+	if body := response.Body.String(); !strings.Contains(body, "File has not been generated") {
+		t.Fatalf("unexpected missing page:\n%s", body)
+	}
+}
+
+func TestWebFileRejectsUnknownFile(t *testing.T) {
+	root := newTestProject(t)
+	app := &webApp{root: root}
+
+	response := getWeb(t, app, "/files/readme")
+
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusNotFound)
+	}
+}
+
+func TestCreateWorkspaceInitializesWorkspaceDirectory(t *testing.T) {
+	root := t.TempDir()
+	if err := ensureServerFiles(root); err != nil {
+		t.Fatal(err)
+	}
+
+	workspace, err := createWorkspace(root, "Production Apps")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if workspace.Name != "production-apps" {
+		t.Fatalf("workspace name = %q", workspace.Name)
+	}
+	workspaceRoot := filepath.Join(root, workspace.Path)
+	for _, path := range []string{
+		filepath.Join(workspaceRoot, reposFile),
+		filepath.Join(workspaceRoot, envFile),
+		filepath.Join(root, workspacesFile),
+	} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("expected %s: %v", path, err)
+		}
+	}
+}
+
+func TestWebWorkspaceCreateRedirectsToWorkspaceRepos(t *testing.T) {
+	root := t.TempDir()
+	if err := ensureServerFiles(root); err != nil {
+		t.Fatal(err)
+	}
+	app := &webApp{root: root}
+
+	response := postWebForm(t, app, "/workspaces", url.Values{"name": {"Production Apps"}})
+
+	if response.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusSeeOther)
+	}
+	if location := response.Header().Get("Location"); location != "/workspaces/production-apps/repos?message=workspace+created" {
+		t.Fatalf("location = %q", location)
+	}
+}
+
+func TestWebWorkspaceRepoRoutesWriteInsideWorkspace(t *testing.T) {
+	root := t.TempDir()
+	if err := ensureServerFiles(root); err != nil {
+		t.Fatal(err)
+	}
+	workspace, err := createWorkspace(root, "ops")
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := &webApp{root: root}
+
+	response := postWebForm(t, app, "/workspaces/ops/repos", url.Values{
+		"github_owner": {"acme"},
+		"github_repo":  {"api"},
+	})
+
+	if response.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusSeeOther)
+	}
+	if location := response.Header().Get("Location"); location != "/workspaces/ops/repos?message=repo+added" {
+		t.Fatalf("location = %q", location)
+	}
+	repos, err := readRepos(filepath.Join(root, workspace.Path, reposFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(repos) != 1 || repos[0].Name != "api" {
+		t.Fatalf("repos = %#v", repos)
+	}
+}
+
+func TestGenerateServerFilesIncludesWorkspaceComposeFiles(t *testing.T) {
+	root := t.TempDir()
+	if err := ensureServerFiles(root); err != nil {
+		t.Fatal(err)
+	}
+	workspace, err := createWorkspace(root, "ops")
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspaceRoot := filepath.Join(root, workspace.Path)
+	writeTestRepos(t, workspaceRoot, []Repo{{
+		Name:          "api",
+		URL:           "https://github.com/acme/api",
+		Path:          "apps/api",
+		Port:          8080,
+		ContainerPort: 3000,
+	}})
+
+	if err := generateServerFilesAt(root); err != nil {
+		t.Fatal(err)
+	}
+
+	masterCompose := readTestFile(t, filepath.Join(root, dockerComposeFile))
+	if !strings.Contains(masterCompose, "include:") || !strings.Contains(masterCompose, "workspaces/ops/docker-compose.yml") {
+		t.Fatalf("unexpected master compose:\n%s", masterCompose)
+	}
+	if _, err := os.Stat(filepath.Join(workspaceRoot, dockerComposeFile)); err != nil {
+		t.Fatalf("expected workspace compose: %v", err)
+	}
+}
+
 func newTestProject(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
@@ -338,11 +1181,37 @@ func runTestGitOutput(t *testing.T, dir string, args ...string) string {
 	return string(bytes.TrimSpace(output))
 }
 
+func readTestFile(t *testing.T, path string) string {
+	t.Helper()
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(contents)
+}
+
 func writeTestRepos(t *testing.T, root string, repos []Repo) {
 	t.Helper()
 	if err := writeRepos(filepath.Join(root, reposFile), repos); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func getWeb(t *testing.T, app *webApp, target string) *httptest.ResponseRecorder {
+	t.Helper()
+	request := httptest.NewRequest(http.MethodGet, target, nil)
+	response := httptest.NewRecorder()
+	app.routes().ServeHTTP(response, request)
+	return response
+}
+
+func postWebForm(t *testing.T, app *webApp, target string, form url.Values) *httptest.ResponseRecorder {
+	t.Helper()
+	request := httptest.NewRequest(http.MethodPost, target, strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	response := httptest.NewRecorder()
+	app.routes().ServeHTTP(response, request)
+	return response
 }
 
 func chdir(t *testing.T, dir string) {

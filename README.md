@@ -1,6 +1,7 @@
 # uppr
 
-`uppr` keeps a list of git repositories up to date.
+`uppr` manages workspaces of git repositories and generates Docker/Caddy launch
+files for them.
 
 ## Setup
 
@@ -16,10 +17,59 @@ GITHUB_USERNAME=your-username
 GITHUB_PASSWORD=your-token-or-password
 ```
 
+You can also set these from the web UI by opening `./uppr web .` and using the
+Credentials page.
+
 Then add repos with the CLI:
 
 ```sh
 ./uppr add https://github.com/phillip-england/some-repo
+```
+
+Or open a local web UI for the project:
+
+```sh
+./uppr .
+./uppr web .
+```
+
+From the web UI, open a repository to edit its config, run git actions, and use
+the embedded browser shell in that repository's configured path.
+
+For server deployment, run the authenticated web UI from the Uppr installation
+root:
+
+```sh
+./uppr serve --addr 0.0.0.0:8787 .
+```
+
+On first login, create a workspace from the Workspaces page. Uppr stores
+workspaces under:
+
+```text
+./workspaces/<workspace-name>/
+```
+
+Each workspace has its own `repos.conf`, `config/.env`, generated `Makefile`,
+and generated `docker-compose.yml`. The server root has `workspaces.conf` plus a
+master `docker-compose.yml` and `Makefile` generated from all registered
+workspaces.
+
+`uppr serve` keeps this app's own runtime files in the same layout used by the
+generated apps:
+
+- `./config/.env` stores GitHub credentials plus `ADMIN_USERNAME`,
+  `ADMIN_PASSWORD`, `SESSION_SECRET`, and `ADDR`.
+- `./data/main.sqlite` stores bounded login failure tracking.
+
+Change `ADMIN_PASSWORD` before exposing the app behind Caddy. Login failures are
+tracked by client IP for a 24 hour window and old rows are purged during login
+checks, so the tracking table does not grow indefinitely.
+
+The included `Dockerfile` exposes port `8787` and starts:
+
+```sh
+uppr serve --addr 0.0.0.0:${PORT} .
 ```
 
 Optional repo settings can be passed when adding:
@@ -72,7 +122,94 @@ name = some-repo
 url = https://github.com/phillip-england/some-repo
 path = apps/some-repo
 branch = main
+port = 3000
+container_port = 3000
+domain = some-repo.localhost
+domain = www.some-repo.localhost
+rate_limit_enabled = false
+rate_limit_zone = dynamic
+rate_limit_events = 100
+rate_limit_window = 1m
+env = NODE_ENV=production
+env = API_BASE_URL=https://api.example.test
+volume = ./cache/some-repo:/app/cache
 ```
+
+Runtime settings:
+
+- `port`: host port exposed by Docker Compose.
+- `container_port`: app port inside the container. If omitted, `uppr` uses the
+  first `EXPOSE` port from the app's `Dockerfile` when available, otherwise
+  `port` is used.
+- `domain`: repeatable Caddy hostname. If omitted, `uppr` uses `<name>.localhost`.
+- `rate_limit_enabled`: enables app-level Caddy rate limiting.
+- `rate_limit_zone`: Caddy rate-limit zone name. Defaults to `dynamic`.
+- `rate_limit_events`: allowed events per window. Defaults to `100`.
+- `rate_limit_window`: rate-limit window such as `1m` or `30s`. Defaults to `1m`.
+- `env`: repeated `KEY=value` entries for container environment.
+- `volume`: repeated Docker volume entries such as `./cache:/app/cache`.
+
+## Generate runtime files
+
+Each configured repo is assumed to have a `Dockerfile` at its configured `path`.
+Generate the runtime files from `repos.conf` with:
+
+```sh
+./uppr generate
+```
+
+This writes:
+
+- `Caddyfile`
+- `caddyx.Dockerfile`
+- `docker-compose.yml`
+- `Makefile`
+
+The generated `caddyx.Dockerfile` builds Caddy with
+`github.com/mholt/caddy-ratelimit`, and the generated Docker Compose file uses
+that image instead of stock Caddy so app-level rate limiting works at launch.
+
+The generated Docker Compose file always mounts each app's local
+`./apps/<app>/config` directory to `/app/config` and `./apps/<app>/data` to
+`/app/data`, and uses `./apps/<app>/config/.env` as that service's env file.
+Apps can rely on `./config/.env` and `./data/main.sqlite` being available when
+their image uses `/app` as its working directory.
+
+When an app Dockerfile includes a line such as `EXPOSE 3000`, `uppr` can infer
+that app's internal container port. `uppr pull` writes the discovered value to
+`container_port` when it is missing, and `uppr generate` also uses the exposed
+port in memory for existing local checkouts.
+
+App repos can also include an `env.schema` file at the repo root:
+
+```text
+API_KEY
+DATABASE_URL
+```
+
+During pull/sync, `uppr` reads `env.schema` and prepares
+`./apps/<app>/config/.env` with blank entries for any missing keys. Existing
+values in that `.env` file are preserved, so the admin only fills in values and
+does not need to remember each app's environment variable names.
+
+The generated `Makefile` includes:
+
+```sh
+make launch
+make stop
+make pull
+make push m="common commit message"
+```
+
+At the server root, generate the master runtime files with:
+
+```sh
+./uppr generate-server .
+```
+
+The master Docker Compose file includes each workspace compose file, so
+`docker compose up --build` from the server root launches all configured
+workspaces.
 
 ## Push repos
 

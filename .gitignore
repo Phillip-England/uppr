@@ -1,3 +1,5 @@
 uppr
 config/.env
 repos/
+data/
+.DS_Store
