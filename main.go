@@ -58,9 +58,12 @@ func main() {
 }
 
 func run(args []string) error {
+	return runWithServe(args, serveServer)
+}
+
+func runWithServe(args []string, serve func([]string) error) error {
 	if len(args) == 0 {
-		printUsage()
-		return nil
+		return serve(nil)
 	}
 
 	switch args[0] {
@@ -96,7 +99,7 @@ func run(args []string) error {
 	case "web", "ui":
 		return serveWeb(args[1:])
 	case "serve":
-		return serveServer(args[1:])
+		return serve(args[1:])
 	case "help", "-h", "--help":
 		printUsage()
 		return nil
@@ -112,6 +115,7 @@ func printUsage() {
 	fmt.Println(`uppr keeps a list of git repos current.
 
 Usage:
+  uppr                            same as uppr serve
   uppr init [path]                create config/.env and repos.conf in path
   uppr add <url> [options]        add a repo to repos.conf
   uppr list                       list configured repos

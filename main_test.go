@@ -15,6 +15,36 @@ import (
 	"testing"
 )
 
+func TestRunDefaultsToServe(t *testing.T) {
+	called := false
+	err := runWithServe(nil, func(args []string) error {
+		called = true
+		if len(args) != 0 {
+			t.Fatalf("serve args = %q, want none", args)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !called {
+		t.Fatal("serve was not called")
+	}
+}
+
+func TestRunServeCommandUsesServe(t *testing.T) {
+	want := []string{"--addr", "127.0.0.1:8080", "/srv/uppr"}
+	err := runWithServe(append([]string{"serve"}, want...), func(args []string) error {
+		if !reflect.DeepEqual(args, want) {
+			t.Fatalf("serve args = %q, want %q", args, want)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestInitProjectCreatesFilesInTargetDirectory(t *testing.T) {
 	dir := t.TempDir()
 
