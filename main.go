@@ -91,6 +91,8 @@ func run(args []string) error {
 			return err
 		}
 		return generateServerFilesAt(absRoot)
+	case "launch":
+		return launchServer(args[1:])
 	case "web", "ui":
 		return serveWeb(args[1:])
 	case "serve":
@@ -117,7 +119,8 @@ Usage:
   uppr pull                       clone missing repos and pull existing repos
   uppr push <message>             commit changes in each repo and push
   uppr generate                   write Caddyfile, docker-compose.yml, and Makefile
-  uppr generate-server [path]     write master docker-compose.yml and Makefile
+  uppr generate-server [path]     write master Caddy/Docker/Make files
+  uppr launch [path]              generate and launch the server Docker Compose stack
   uppr web [path]                 open a browser UI for an uppr project
   uppr serve [path]               serve authenticated web UI for deployment
   uppr <path>                     shorthand for uppr web <path>
@@ -146,6 +149,32 @@ repos.conf format:
 App repos can include env.schema with one environment variable name per line.
 After pull/sync, uppr prepares apps/<repo>/config/.env with blank entries for
 missing schema keys while preserving existing values.`)
+}
+
+func launchServer(args []string) error {
+	if len(args) > 1 {
+		return errors.New("usage: uppr launch [path]")
+	}
+	root := "."
+	if len(args) == 1 {
+		root = args[0]
+	}
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return err
+	}
+	if err := ensureServerFiles(absRoot); err != nil {
+		return err
+	}
+	if err := generateServerFilesAt(absRoot); err != nil {
+		return err
+	}
+	cmd := exec.Command("docker", "compose", "up", "--build")
+	cmd.Dir = absRoot
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
 }
 
 func initProject(args []string) error {

@@ -618,6 +618,14 @@ func (app *webApp) handleGenerate(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/workspaces?message=files+generated", http.StatusSeeOther)
 		return
 	}
+	if app.serverRoot != "" {
+		if err := generateServerFilesAt(app.serverRoot); err != nil {
+			app.renderFiles(w, fileListPage{Error: err.Error()})
+			return
+		}
+		http.Redirect(w, r, app.routePath("/files?message=files+generated"), http.StatusSeeOther)
+		return
+	}
 	if err := generateProjectFilesAt(app.root); err != nil {
 		app.renderFiles(w, fileListPage{Error: err.Error()})
 		return
@@ -648,7 +656,7 @@ func (app *webApp) handleFiles(w http.ResponseWriter, r *http.Request) {
 func (app *webApp) renderFiles(w http.ResponseWriter, page fileListPage) {
 	page.Root = app.root
 	page.BasePath = app.basePath
-	page.ProjectFiles = projectFiles()
+	page.ProjectFiles = app.projectFiles()
 	if err := filesTemplate.Execute(w, page); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
@@ -667,7 +675,7 @@ func (app *webApp) handleFile(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	file, ok := projectFileByID(strings.Trim(strings.TrimPrefix(r.URL.Path, "/files/"), "/"))
+	file, ok := projectFileByID(app.projectFiles(), strings.Trim(strings.TrimPrefix(r.URL.Path, "/files/"), "/"))
 	if !ok {
 		http.NotFound(w, r)
 		return
@@ -798,8 +806,22 @@ func projectFiles() []projectFile {
 	}
 }
 
-func projectFileByID(id string) (projectFile, bool) {
-	for _, file := range projectFiles() {
+func (app *webApp) projectFiles() []projectFile {
+	files := projectFiles()
+	if app.serverRoot == "" {
+		return files
+	}
+	filtered := files[:0]
+	for _, file := range files {
+		if !file.Generated {
+			filtered = append(filtered, file)
+		}
+	}
+	return filtered
+}
+
+func projectFileByID(files []projectFile, id string) (projectFile, bool) {
+	for _, file := range files {
 		if file.ID == id {
 			return file, true
 		}
@@ -2088,7 +2110,7 @@ const workspacesBody = `
   <div class="section-heading">
     <div>
       <h2 id="new-workspace-heading">New workspace</h2>
-      <p>Workspace names become local directories under workspaces/.</p>
+      <p>Workspace names become directories in Uppr's configured workspace storage location.</p>
     </div>
   </div>
   <form method="post" action="/workspaces" data-loading-label="Creating...">
@@ -2124,7 +2146,7 @@ const workspacesBody = `
     <tbody>
     {{range .Workspaces}}
       <tr>
-        <td><a class="repo-row__main" href="/workspaces/{{.Name}}/repos"><span class="repo-name">{{.Name}}</span><span class="repo-meta mono">/workspaces/{{.Name}}</span></a></td>
+        <td><a class="repo-row__main" href="/workspaces/{{.Name}}/repos"><span class="repo-name">{{.Name}}</span><span class="repo-meta mono">{{.Path}}</span></a></td>
         <td><code class="mono repo-meta">{{.Path}}</code></td>
         <td>
           <div class="inline-actions">

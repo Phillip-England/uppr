@@ -43,17 +43,22 @@ root:
 ./uppr serve --addr 0.0.0.0:8787 .
 ```
 
-On first login, create a workspace from the Workspaces page. Uppr stores
-workspaces under:
+On first login, create a workspace from the Workspaces page. Uppr stores the
+workspace registry in the server root, but workspace directories are created in
+a system data location, not under the current project directory:
 
 ```text
-./workspaces/<workspace-name>/
+macOS:   ~/Library/Application Support/uppr/workspaces/<workspace-name>/
+Linux:   ${XDG_DATA_HOME:-~/.local/share}/uppr/workspaces/<workspace-name>/
+Windows: %LOCALAPPDATA%\uppr\workspaces\<workspace-name>\
 ```
 
-Each workspace has its own `repos.conf`, `config/.env`, generated `Makefile`,
-and generated `docker-compose.yml`. The server root has `workspaces.conf` plus a
-master `docker-compose.yml` and `Makefile` generated from all registered
-workspaces.
+Set `UPPR_WORKSPACES_DIR` before launching `uppr serve` to choose a deployment
+specific workspace storage directory.
+
+Each workspace has its own `repos.conf` and `config/.env`. The server root has
+`workspaces.conf` plus the generated root `Caddyfile`, `caddyx.Dockerfile`,
+`docker-compose.yml`, and `Makefile` used to launch all registered workspaces.
 
 `uppr serve` keeps this app's own runtime files in the same layout used by the
 generated apps:
@@ -201,15 +206,25 @@ make pull
 make push m="common commit message"
 ```
 
-At the server root, generate the master runtime files with:
+At the server root, launch the whole system with:
+
+```sh
+./uppr launch .
+```
+
+`uppr launch` creates any missing server files, regenerates the root runtime
+files from all registered workspaces, and runs `docker compose up --build` from
+the server root.
+
+You can generate the root runtime files without launching Docker with:
 
 ```sh
 ./uppr generate-server .
 ```
 
-The master Docker Compose file includes each workspace compose file, so
-`docker compose up --build` from the server root launches all configured
-workspaces.
+The root Docker Compose file directly defines the Caddy service and every app
+service from every workspace. Workspaces do not need their own compose files for
+server launch.
 
 ## Push repos
 

@@ -7,12 +7,14 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 )
 
 const (
-	workspacesDir  = "workspaces"
-	workspacesFile = "workspaces.conf"
+	workspacesDirEnv = "UPPR_WORKSPACES_DIR"
+	workspacesDir    = "workspaces"
+	workspacesFile   = "workspaces.conf"
 )
 
 type Workspace struct {
@@ -27,9 +29,6 @@ func ensureServerFiles(root string) error {
 		return err
 	}
 	if err := os.MkdirAll(filepath.Join(root, "data"), 0o755); err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Join(root, workspacesDir), 0o755); err != nil {
 		return err
 	}
 	if err := writeFileIfMissing(filepath.Join(root, envFile), defaultEnvContents()); err != nil {
@@ -61,8 +60,12 @@ func createWorkspace(serverRoot, name string) (Workspace, error) {
 			return Workspace{}, fmt.Errorf("workspace %q already exists", name)
 		}
 	}
-	workspace := Workspace{Name: name, Path: filepath.Join(workspacesDir, name)}
-	root := filepath.Join(serverRoot, workspace.Path)
+	baseDir, err := defaultWorkspacesRoot()
+	if err != nil {
+		return Workspace{}, err
+	}
+	workspace := Workspace{Name: name, Path: filepath.Join(baseDir, name)}
+	root := workspace.Path
 	if err := ensureWorkspaceFiles(root, filepath.Join(serverRoot, envFile)); err != nil {
 		return Workspace{}, err
 	}
@@ -71,6 +74,33 @@ func createWorkspace(serverRoot, name string) (Workspace, error) {
 		return Workspace{}, err
 	}
 	return workspace, nil
+}
+
+func defaultWorkspacesRoot() (string, error) {
+	if dir := strings.TrimSpace(os.Getenv(workspacesDirEnv)); dir != "" {
+		return filepath.Abs(dir)
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("determine workspace directory: %w", err)
+	}
+	switch runtime.GOOS {
+	case "darwin":
+		return filepath.Join(home, "Library", "Application Support", "uppr", workspacesDir), nil
+	case "windows":
+		if dir := strings.TrimSpace(os.Getenv("LOCALAPPDATA")); dir != "" {
+			return filepath.Join(dir, "uppr", workspacesDir), nil
+		}
+		if dir := strings.TrimSpace(os.Getenv("APPDATA")); dir != "" {
+			return filepath.Join(dir, "uppr", workspacesDir), nil
+		}
+		return filepath.Join(home, "AppData", "Local", "uppr", workspacesDir), nil
+	default:
+		if dir := strings.TrimSpace(os.Getenv("XDG_DATA_HOME")); dir != "" {
+			return filepath.Join(dir, "uppr", workspacesDir), nil
+		}
+		return filepath.Join(home, ".local", "share", "uppr", workspacesDir), nil
+	}
 }
 
 func ensureWorkspaceFiles(root, serverEnvPath string) error {

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -9,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -1036,6 +1038,8 @@ func TestWebFileRejectsUnknownFile(t *testing.T) {
 
 func TestCreateWorkspaceInitializesWorkspaceDirectory(t *testing.T) {
 	root := t.TempDir()
+	workspaceBase := filepath.Join(t.TempDir(), "uppr-workspaces")
+	t.Setenv(workspacesDirEnv, workspaceBase)
 	if err := ensureServerFiles(root); err != nil {
 		t.Fatal(err)
 	}
@@ -1048,7 +1052,10 @@ func TestCreateWorkspaceInitializesWorkspaceDirectory(t *testing.T) {
 	if workspace.Name != "production-apps" {
 		t.Fatalf("workspace name = %q", workspace.Name)
 	}
-	workspaceRoot := filepath.Join(root, workspace.Path)
+	if workspace.Path != filepath.Join(workspaceBase, "production-apps") {
+		t.Fatalf("workspace path = %q, want under %q", workspace.Path, workspaceBase)
+	}
+	workspaceRoot := workspace.Path
 	for _, path := range []string{
 		filepath.Join(workspaceRoot, reposFile),
 		filepath.Join(workspaceRoot, envFile),
@@ -1058,10 +1065,14 @@ func TestCreateWorkspaceInitializesWorkspaceDirectory(t *testing.T) {
 			t.Fatalf("expected %s: %v", path, err)
 		}
 	}
+	if _, err := os.Stat(filepath.Join(root, workspacesDir)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("server root should not contain %s directory; stat err = %v", workspacesDir, err)
+	}
 }
 
 func TestWebWorkspaceCreateRedirectsToWorkspaceRepos(t *testing.T) {
 	root := t.TempDir()
+	t.Setenv(workspacesDirEnv, filepath.Join(t.TempDir(), "uppr-workspaces"))
 	if err := ensureServerFiles(root); err != nil {
 		t.Fatal(err)
 	}
@@ -1079,6 +1090,7 @@ func TestWebWorkspaceCreateRedirectsToWorkspaceRepos(t *testing.T) {
 
 func TestWebWorkspaceRepoRoutesWriteInsideWorkspace(t *testing.T) {
 	root := t.TempDir()
+	t.Setenv(workspacesDirEnv, filepath.Join(t.TempDir(), "uppr-workspaces"))
 	if err := ensureServerFiles(root); err != nil {
 		t.Fatal(err)
 	}
@@ -1099,7 +1111,7 @@ func TestWebWorkspaceRepoRoutesWriteInsideWorkspace(t *testing.T) {
 	if location := response.Header().Get("Location"); location != "/workspaces/ops/repos?message=repo+added" {
 		t.Fatalf("location = %q", location)
 	}
-	repos, err := readRepos(filepath.Join(root, workspace.Path, reposFile))
+	repos, err := readRepos(filepath.Join(workspace.Path, reposFile))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1108,8 +1120,9 @@ func TestWebWorkspaceRepoRoutesWriteInsideWorkspace(t *testing.T) {
 	}
 }
 
-func TestGenerateServerFilesIncludesWorkspaceComposeFiles(t *testing.T) {
+func TestGenerateServerFilesBuildsSingleRootCompose(t *testing.T) {
 	root := t.TempDir()
+	t.Setenv(workspacesDirEnv, filepath.Join(t.TempDir(), "uppr workspaces"))
 	if err := ensureServerFiles(root); err != nil {
 		t.Fatal(err)
 	}
@@ -1117,7 +1130,7 @@ func TestGenerateServerFilesIncludesWorkspaceComposeFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	workspaceRoot := filepath.Join(root, workspace.Path)
+	workspaceRoot := workspace.Path
 	writeTestRepos(t, workspaceRoot, []Repo{{
 		Name:          "api",
 		URL:           "https://github.com/acme/api",
@@ -1131,11 +1144,57 @@ func TestGenerateServerFilesIncludesWorkspaceComposeFiles(t *testing.T) {
 	}
 
 	masterCompose := readTestFile(t, filepath.Join(root, dockerComposeFile))
-	if !strings.Contains(masterCompose, "include:") || !strings.Contains(masterCompose, "workspaces/ops/docker-compose.yml") {
+	for _, want := range []string{
+		"services:",
+		"  caddy:",
+		"  ops-api:",
+		strconv.Quote(filepath.ToSlash(filepath.Join(workspace.Path, "apps", "api"))),
+	} {
+		if !strings.Contains(masterCompose, want) {
+			t.Fatalf("master compose missing %q:\n%s", want, masterCompose)
+		}
+	}
+	if strings.Contains(masterCompose, "include:") || strings.Contains(masterCompose, "8080:3000") {
 		t.Fatalf("unexpected master compose:\n%s", masterCompose)
 	}
-	if _, err := os.Stat(filepath.Join(workspaceRoot, dockerComposeFile)); err != nil {
-		t.Fatalf("expected workspace compose: %v", err)
+	masterCaddy := readTestFile(t, filepath.Join(root, caddyFile))
+	if !strings.Contains(masterCaddy, "api.localhost {") || !strings.Contains(masterCaddy, "reverse_proxy ops-api:3000") {
+		t.Fatalf("unexpected master Caddyfile:\n%s", masterCaddy)
+	}
+	if _, err := os.Stat(filepath.Join(workspaceRoot, dockerComposeFile)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("workspace compose should not be generated; stat err = %v", err)
+	}
+}
+
+func TestWebWorkspaceGenerateWritesRootCompose(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv(workspacesDirEnv, filepath.Join(t.TempDir(), "uppr-workspaces"))
+	if err := ensureServerFiles(root); err != nil {
+		t.Fatal(err)
+	}
+	workspace, err := createWorkspace(root, "ops")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTestRepos(t, workspace.Path, []Repo{{
+		Name:          "api",
+		URL:           "https://github.com/acme/api",
+		Path:          "apps/api",
+		Port:          8080,
+		ContainerPort: 3000,
+	}})
+	app := &webApp{root: root}
+
+	response := postWebForm(t, app, "/workspaces/ops/generate", nil)
+
+	if response.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusSeeOther)
+	}
+	if _, err := os.Stat(filepath.Join(root, dockerComposeFile)); err != nil {
+		t.Fatalf("expected root compose: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(workspace.Path, dockerComposeFile)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("workspace compose should not be generated; stat err = %v", err)
 	}
 }
 
