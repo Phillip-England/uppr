@@ -15,6 +15,10 @@ Fill in `config/.env`:
 ```env
 GITHUB_USERNAME=your-username
 GITHUB_PASSWORD=your-token-or-password
+ADMIN_USERNAME=your-admin-username
+ADMIN_PASSWORD=use-a-strong-password
+SESSION_SECRET=use-a-long-random-secret
+ADDR=:9944
 ```
 
 You can also set these from the web UI by opening `./uppr web .` and using the
@@ -69,7 +73,9 @@ generated apps:
   `ADMIN_PASSWORD`, `SESSION_SECRET`, and `ADDR`.
 - `./data/main.sqlite` stores bounded login failure tracking.
 
-Change `ADMIN_PASSWORD` before exposing the app behind Caddy. Login failures are
+`uppr serve` and `uppr web` refuse to start when `config/.env` is missing, and
+the authenticated server requires non-empty admin credentials and a session
+secret. Login failures are
 tracked by client IP for a 24 hour window and old rows are purged during login
 checks, so the tracking table does not grow indefinitely.
 

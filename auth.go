@@ -52,8 +52,8 @@ func defaultEnvContents() []byte {
 	return []byte(strings.Join([]string{
 		"GITHUB_USERNAME=",
 		"GITHUB_PASSWORD=",
-		"ADMIN_USERNAME=admin",
-		"ADMIN_PASSWORD=change-me-now",
+		"ADMIN_USERNAME=",
+		"ADMIN_PASSWORD=",
 		"SESSION_SECRET=" + secret,
 		"ADDR=:9944",
 		"",
@@ -76,11 +76,11 @@ func ensureEnvDefaults(path string) error {
 		ordered = append(ordered, "GITHUB_PASSWORD")
 	}
 	if _, ok := values["ADMIN_USERNAME"]; !ok {
-		defaults["ADMIN_USERNAME"] = "admin"
+		defaults["ADMIN_USERNAME"] = ""
 		ordered = append(ordered, "ADMIN_USERNAME")
 	}
 	if _, ok := values["ADMIN_PASSWORD"]; !ok {
-		defaults["ADMIN_PASSWORD"] = "change-me-now"
+		defaults["ADMIN_PASSWORD"] = ""
 		ordered = append(ordered, "ADMIN_PASSWORD")
 	}
 	if _, ok := values["SESSION_SECRET"]; !ok {

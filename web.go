@@ -135,16 +135,13 @@ func reorderServeArgs(args []string) []string {
 }
 
 func ensureProjectFiles(root string) error {
+	if err := requireEnvFile(root); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Join(root, "config"), 0o755); err != nil {
 		return err
 	}
 	if err := os.MkdirAll(filepath.Join(root, "data"), 0o755); err != nil {
-		return err
-	}
-	if err := writeFileIfMissing(filepath.Join(root, envFile), defaultEnvContents()); err != nil {
-		return err
-	}
-	if err := ensureEnvDefaults(filepath.Join(root, envFile)); err != nil {
 		return err
 	}
 	if err := writeFileIfMissing(filepath.Join(root, reposFile), nil); err != nil {

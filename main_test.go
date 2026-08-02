@@ -145,6 +145,56 @@ func TestEnsureEnvDefaultsMigratesLegacyServeAddr(t *testing.T) {
 	}
 }
 
+func TestEnsureServerFilesRequiresEnvFile(t *testing.T) {
+	root := t.TempDir()
+
+	err := ensureServerFiles(root)
+	if err == nil || !strings.Contains(err.Error(), filepath.Join(root, envFile)) {
+		t.Fatalf("error = %v, want missing %s error", err, envFile)
+	}
+	if _, statErr := os.Stat(filepath.Join(root, envFile)); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("ensureServerFiles created %s; stat error = %v", envFile, statErr)
+	}
+}
+
+func TestEnsureProjectFilesRequiresEnvFile(t *testing.T) {
+	root := t.TempDir()
+
+	err := ensureProjectFiles(root)
+	if err == nil || !strings.Contains(err.Error(), filepath.Join(root, envFile)) {
+		t.Fatalf("error = %v, want missing %s error", err, envFile)
+	}
+}
+
+func ensureTestServerFiles(root string) error {
+	if err := os.MkdirAll(filepath.Join(root, "config"), 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(root, envFile), defaultEnvContents(), 0o600); err != nil {
+		return err
+	}
+	return ensureServerFiles(root)
+}
+
+func TestEnsureEnvDefaultsDoesNotCreateKnownAdminCredentials(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".env")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ensureEnvDefaults(path); err != nil {
+		t.Fatal(err)
+	}
+	values, err := readDotEnv(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if values["ADMIN_USERNAME"] != "" || values["ADMIN_PASSWORD"] != "" {
+		t.Fatalf("admin defaults must be blank: username=%q password=%q", values["ADMIN_USERNAME"], values["ADMIN_PASSWORD"])
+	}
+}
+
 func TestReadReposDefaultsNameAndPath(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "repos.conf")
@@ -1093,7 +1143,7 @@ func TestCreateWorkspaceInitializesWorkspaceDirectory(t *testing.T) {
 	root := t.TempDir()
 	workspaceBase := filepath.Join(t.TempDir(), "uppr-workspaces")
 	t.Setenv(workspacesDirEnv, workspaceBase)
-	if err := ensureServerFiles(root); err != nil {
+	if err := ensureTestServerFiles(root); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1126,7 +1176,7 @@ func TestCreateWorkspaceInitializesWorkspaceDirectory(t *testing.T) {
 func TestWebWorkspaceCreateRedirectsToWorkspaceRepos(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv(workspacesDirEnv, filepath.Join(t.TempDir(), "uppr-workspaces"))
-	if err := ensureServerFiles(root); err != nil {
+	if err := ensureTestServerFiles(root); err != nil {
 		t.Fatal(err)
 	}
 	app := &webApp{root: root}
@@ -1144,7 +1194,7 @@ func TestWebWorkspaceCreateRedirectsToWorkspaceRepos(t *testing.T) {
 func TestWebWorkspaceRepoRoutesWriteInsideWorkspace(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv(workspacesDirEnv, filepath.Join(t.TempDir(), "uppr-workspaces"))
-	if err := ensureServerFiles(root); err != nil {
+	if err := ensureTestServerFiles(root); err != nil {
 		t.Fatal(err)
 	}
 	workspace, err := createWorkspace(root, "ops")
@@ -1176,7 +1226,7 @@ func TestWebWorkspaceRepoRoutesWriteInsideWorkspace(t *testing.T) {
 func TestGenerateServerFilesBuildsSingleRootCompose(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv(workspacesDirEnv, filepath.Join(t.TempDir(), "uppr workspaces"))
-	if err := ensureServerFiles(root); err != nil {
+	if err := ensureTestServerFiles(root); err != nil {
 		t.Fatal(err)
 	}
 	workspace, err := createWorkspace(root, "ops")
@@ -1222,7 +1272,7 @@ func TestGenerateServerFilesBuildsSingleRootCompose(t *testing.T) {
 func TestWebWorkspaceGenerateWritesRootCompose(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv(workspacesDirEnv, filepath.Join(t.TempDir(), "uppr-workspaces"))
-	if err := ensureServerFiles(root); err != nil {
+	if err := ensureTestServerFiles(root); err != nil {
 		t.Fatal(err)
 	}
 	workspace, err := createWorkspace(root, "ops")

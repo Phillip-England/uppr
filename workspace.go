@@ -25,16 +25,13 @@ type Workspace struct {
 var nonWorkspaceName = regexp.MustCompile(`[^a-zA-Z0-9_-]+`)
 
 func ensureServerFiles(root string) error {
+	if err := requireEnvFile(root); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Join(root, "config"), 0o755); err != nil {
 		return err
 	}
 	if err := os.MkdirAll(filepath.Join(root, "data"), 0o755); err != nil {
-		return err
-	}
-	if err := writeFileIfMissing(filepath.Join(root, envFile), defaultEnvContents()); err != nil {
-		return err
-	}
-	if err := ensureEnvDefaults(filepath.Join(root, envFile)); err != nil {
 		return err
 	}
 	if err := writeFileIfMissing(filepath.Join(root, workspacesFile), nil); err != nil {
@@ -42,6 +39,19 @@ func ensureServerFiles(root string) error {
 	}
 	if err := ensureAuthDBFile(root); err != nil {
 		return err
+	}
+	return nil
+}
+
+func requireEnvFile(root string) error {
+	envPath := filepath.Join(root, envFile)
+	if info, err := os.Stat(envPath); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("%s is missing; create it before starting uppr (or run `uppr init %s`)", envPath, root)
+		}
+		return err
+	} else if info.IsDir() {
+		return fmt.Errorf("%s must be a file", envPath)
 	}
 	return nil
 }
