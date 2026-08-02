@@ -166,6 +166,7 @@ type webApp struct {
 type workspacesPage struct {
 	Root       string
 	BasePath   string
+	ActiveRepo string
 	Workspaces []Workspace
 	NewName    string
 	Message    string
@@ -175,6 +176,7 @@ type workspacesPage struct {
 type indexPage struct {
 	Root         string
 	BasePath     string
+	ActiveRepo   string
 	Repos        []Repo
 	NewRepo      Repo
 	ProjectFiles []projectFile
@@ -186,6 +188,7 @@ type repoPage struct {
 	Root       string
 	BasePath   string
 	Repo       Repo
+	ActiveRepo string
 	Index      int
 	AppEnvPath string
 	AppEnv     []envField
@@ -196,35 +199,41 @@ type repoPage struct {
 }
 
 type filePage struct {
-	Root     string
-	BasePath string
-	File     projectFile
-	Content  string
-	Missing  bool
-	Message  string
-	Error    string
+	Root       string
+	BasePath   string
+	ActiveRepo string
+	File       projectFile
+	Content    string
+	Missing    bool
+	Message    string
+	Error      string
 }
 
 type syncPage struct {
-	Root     string
-	BasePath string
-	Repos    []Repo
-	Message  string
-	Error    string
+	Root       string
+	BasePath   string
+	ActiveRepo string
+	Repos      []Repo
+	Message    string
+	Error      string
 }
 
 type credentialsPage struct {
-	Root     string
-	BasePath string
-	Username string
-	Password string
-	Message  string
-	Error    string
+	Root       string
+	BasePath   string
+	ActiveRepo string
+	Username   string
+	Password   string
+	Message    string
+	Error      string
 }
 
 type envField struct {
-	Key   string
-	Value string
+	Key         string
+	Value       string
+	Description string
+	Example     string
+	Required    bool
 }
 
 type projectFile struct {
@@ -248,6 +257,7 @@ func (app *webApp) routes() http.Handler {
 	mux.HandleFunc("/repos", app.handleAddRepo)
 	mux.HandleFunc("/repos/", app.handleRepo)
 	mux.HandleFunc("/generate", app.handleGenerate)
+	mux.HandleFunc("/env/download", app.handleEnvDownload)
 	mux.HandleFunc("/sync", app.handleSync)
 	mux.HandleFunc("/sync/pull", app.handleSyncPull)
 	mux.HandleFunc("/sync/push", app.handleSyncPush)
@@ -374,6 +384,7 @@ func (app *webApp) workspaceRoutes() http.Handler {
 	mux.HandleFunc("/repos", app.handleAddRepo)
 	mux.HandleFunc("/repos/", app.handleRepo)
 	mux.HandleFunc("/generate", app.handleGenerate)
+	mux.HandleFunc("/env/download", app.handleEnvDownload)
 	mux.HandleFunc("/sync", app.handleSync)
 	mux.HandleFunc("/sync/pull", app.handleSyncPull)
 	mux.HandleFunc("/sync/push", app.handleSyncPush)
@@ -492,6 +503,9 @@ func (app *webApp) handleEditRepo(w http.ResponseWriter, r *http.Request, index 
 func (app *webApp) renderRepo(w http.ResponseWriter, page repoPage) {
 	page.Root = app.root
 	page.BasePath = app.basePath
+	if page.ActiveRepo == "" {
+		page.ActiveRepo = repoLabel(page.Repo)
+	}
 	path, err := repoShellPath(app.root, page.Index)
 	page.ShellPath = path
 	if err != nil {
@@ -632,9 +646,25 @@ func (app *webApp) handleGenerate(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, app.routePath("/files?message=files+generated"), http.StatusSeeOther)
 }
 
+func (app *webApp) handleEnvDownload(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	contents, err := exportWorkspaceEnv(app.root)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Content-Disposition", `attachment; filename="uppr-env-export.env"`)
+	_, _ = w.Write([]byte(contents))
+}
+
 type fileListPage struct {
 	Root         string
 	BasePath     string
+	ActiveRepo   string
 	ProjectFiles []projectFile
 	Message      string
 	Error        string
@@ -897,24 +927,73 @@ func repoAppEnvFields(root string, repo Repo) ([]envField, string, error) {
 	repos := []Repo{repo}
 	resolveRepoPaths(root, repos)
 	repo = repos[0]
-	schemaPath := filepath.Join(repo.Path, envSchemaFile)
-	keys, err := readEnvSchema(schemaPath)
+	variables, err := readRepoEnvSchema(repo.Path)
 	if err != nil {
 		return nil, filepath.Join(repo.Path, envFile), err
 	}
 	envPath := filepath.Join(repo.Path, envFile)
-	if len(keys) == 0 {
+	if len(variables) == 0 {
 		return nil, envPath, nil
 	}
 	values, err := readDotEnvIfExists(envPath)
 	if err != nil {
 		return nil, envPath, err
 	}
-	fields := make([]envField, 0, len(keys))
-	for _, key := range keys {
-		fields = append(fields, envField{Key: key, Value: values[key]})
+	fields := make([]envField, 0, len(variables))
+	for _, variable := range variables {
+		fields = append(fields, envField{
+			Key:         variable.Key,
+			Value:       values[variable.Key],
+			Description: variable.Description,
+			Example:     variable.Example,
+			Required:    variable.Required,
+		})
 	}
 	return fields, envPath, nil
+}
+
+func exportWorkspaceEnv(root string) (string, error) {
+	repos, err := readRepos(filepath.Join(root, reposFile))
+	if err != nil {
+		return "", err
+	}
+	resolveRepoPaths(root, repos)
+	var builder strings.Builder
+	builder.WriteString("# Exported by uppr. Keep this file private.\n")
+	for _, repo := range repos {
+		builder.WriteString("\n")
+		fmt.Fprintf(&builder, "# [%s]\n", repoLabel(repo))
+		fmt.Fprintf(&builder, "# path: %s\n", repo.Path)
+		values, err := readDotEnvIfExists(filepath.Join(repo.Path, envFile))
+		if err != nil {
+			return "", err
+		}
+		variables, err := readRepoEnvSchema(repo.Path)
+		if err != nil {
+			return "", err
+		}
+		written := map[string]bool{}
+		for _, variable := range variables {
+			fmt.Fprintf(&builder, "%s=%s\n", variable.Key, quoteDotEnvValue(values[variable.Key]))
+			written[variable.Key] = true
+		}
+		for _, entry := range repo.Env {
+			key, value, ok := strings.Cut(entry, "=")
+			key = strings.TrimSpace(key)
+			if !ok || !isEnvKey(key) || written[key] {
+				continue
+			}
+			fmt.Fprintf(&builder, "%s=%s\n", key, quoteDotEnvValue(value))
+			written[key] = true
+		}
+		for key, value := range values {
+			if written[key] {
+				continue
+			}
+			fmt.Fprintf(&builder, "%s=%s\n", key, quoteDotEnvValue(value))
+		}
+	}
+	return builder.String(), nil
 }
 
 func saveRepoAppEnvFromForm(root string, repo Repo, r *http.Request) error {
@@ -1711,6 +1790,9 @@ h3 { font-size:15px; line-height:1.25; }
 .brand { display:flex; gap:11px; align-items:center; padding:4px 8px 12px; }
 .brand-mark { width:34px; height:34px; border-radius:8px; display:grid; place-items:center; color:#fff; background:linear-gradient(135deg, var(--accent), #44c78a); font-weight:850; }
 .brand-name { font-size:17px; font-weight:760; }
+.active-context { margin:-10px 8px 0; padding:9px 10px; border:1px solid var(--border); border-radius:var(--radius-sm); background:var(--surface-muted); min-width:0; }
+.active-context .eyebrow { margin-bottom:3px; }
+.active-context__name { display:block; font-weight:750; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .subtitle, .page-description, .section-heading p, .help, .empty-state p, .repo-meta, .muted { color:var(--text-muted); }
 .subtitle { font-size:12px; }
 .nav-links { display:grid; gap:4px; }
@@ -1833,7 +1915,7 @@ body.drawer-open .drawer { transform:translateX(0); }
 <div class="mobile-bar">
   <div class="brand">
     <div class="brand-mark">U</div>
-    <div><div class="brand-name">Uppr</div><p class="subtitle">Infrastructure workspace</p></div>
+    <div><div class="brand-name">Uppr</div><p class="subtitle">{{if .ActiveRepo}}Repo: {{.ActiveRepo}}{{else}}Infrastructure workspace{{end}}</p></div>
   </div>
   <button class="button button--small hamburger" type="button" data-mobile-menu aria-label="Open navigation" aria-controls="mobile-navigation" aria-expanded="false"><span class="hamburger-lines" aria-hidden="true"><span></span><span></span><span></span></span></button>
 </div>
@@ -1860,6 +1942,12 @@ body.drawer-open .drawer { transform:translateX(0); }
       <div class="brand-mark">U</div>
       <div><div class="brand-name">Uppr</div><p class="subtitle">Infrastructure workspace</p></div>
     </div>
+    {{if .ActiveRepo}}
+    <div class="active-context">
+      <span class="eyebrow">Current repo</span>
+      <span class="active-context__name mono" title="{{.ActiveRepo}}">{{.ActiveRepo}}</span>
+    </div>
+    {{end}}
     <nav class="nav-links" aria-label="Primary">
       <a href="/workspaces" data-nav-link><span class="nav-icon">##</span>Workspaces</a>
       <a href="{{.BasePath}}/repos" data-nav-link><span class="nav-icon">[]</span>Repositories</a>
@@ -2174,7 +2262,10 @@ const indexBody = `
     <h1>Repositories</h1>
     <p class="page-description">Manage source repositories connected to this workspace.</p>
   </div>
-  <button class="button button--primary" type="button" data-open-drawer>Add repository</button>
+  <div class="inline-actions">
+    <a class="button" href="{{.BasePath}}/env/download">Download env</a>
+    <button class="button button--primary" type="button" data-open-drawer>Add repository</button>
+  </div>
 </header>
 
 <section class="flat-section" aria-labelledby="project-root-heading">
@@ -2613,7 +2704,9 @@ const repoBody = `
             <label class="env-key mono" for="app-env-{{.Key}}" title="{{.Key}}">{{.Key}}</label>
             <div>
               <input type="hidden" name="app_env_key" value="{{.Key}}">
-              <input class="mono" id="app-env-{{.Key}}" name="app_env_value" value="{{.Value}}" autocomplete="off">
+              <input class="mono" id="app-env-{{.Key}}" name="app_env_value" value="{{.Value}}" {{if .Example}}placeholder="{{.Example}}"{{end}} autocomplete="off">
+              {{if .Description}}<p class="help">{{.Description}}</p>{{end}}
+              {{if .Example}}<p class="help">Example: <code class="mono">{{.Example}}</code></p>{{end}}
             </div>
           </div>
           {{end}}
@@ -2621,8 +2714,8 @@ const repoBody = `
         <p class="help">Saved to <code class="mono">{{.AppEnvPath}}</code>.</p>
         {{else}}
         <div class="empty-state">
-          <h3>No env.schema found</h3>
-          <p>Pull the repository or add env.schema at the app root.</p>
+          <h3>No environment schema found</h3>
+          <p>Pull the repository or add schema.json at the app root.</p>
         </div>
         {{end}}
       </div>

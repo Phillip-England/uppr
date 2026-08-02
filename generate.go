@@ -121,7 +121,7 @@ func applyDockerfileExposedPorts(root string, repos []Repo) error {
 	resolvedRepos := append([]Repo(nil), repos...)
 	resolveRepoPaths(root, resolvedRepos)
 	for i := range repos {
-		if repos[i].ContainerPort != 0 {
+		if repos[i].Port != 0 && repos[i].ContainerPort != 0 {
 			continue
 		}
 		port, err := readDockerfileExposedPort(filepath.Join(resolvedRepos[i].Path, "Dockerfile"))
@@ -129,7 +129,12 @@ func applyDockerfileExposedPorts(root string, repos []Repo) error {
 			return err
 		}
 		if port != 0 {
-			repos[i].ContainerPort = port
+			if repos[i].Port == 0 {
+				repos[i].Port = port
+			}
+			if repos[i].ContainerPort == 0 {
+				repos[i].ContainerPort = port
+			}
 		}
 	}
 	return nil

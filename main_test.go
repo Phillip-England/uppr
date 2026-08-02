@@ -410,7 +410,7 @@ func TestGenerateProjectFilesAt(t *testing.T) {
 	}
 }
 
-func TestGenerateProjectFilesUsesDockerfileExposeForContainerPort(t *testing.T) {
+func TestGenerateProjectFilesUsesDockerfileExposeForPorts(t *testing.T) {
 	root := newTestProject(t)
 	repoPath := filepath.Join(root, "apps", "api")
 	if err := os.MkdirAll(repoPath, 0o755); err != nil {
@@ -423,7 +423,6 @@ func TestGenerateProjectFilesUsesDockerfileExposeForContainerPort(t *testing.T) 
 		Name:   "api",
 		URL:    "https://github.com/acme/api",
 		Path:   "apps/api",
-		Port:   8080,
 		Domain: "api.localhost",
 	}})
 
@@ -433,15 +432,15 @@ func TestGenerateProjectFilesUsesDockerfileExposeForContainerPort(t *testing.T) 
 
 	compose := readTestFile(t, filepath.Join(root, dockerComposeFile))
 	caddy := readTestFile(t, filepath.Join(root, caddyFile))
-	if !strings.Contains(compose, `      - "8080:3000"`) {
-		t.Fatalf("compose should use exposed container port:\n%s", compose)
+	if !strings.Contains(compose, `      - "3000:3000"`) {
+		t.Fatalf("compose should use exposed host and container port:\n%s", compose)
 	}
 	if !strings.Contains(caddy, "reverse_proxy api:3000") {
 		t.Fatalf("Caddyfile should use exposed container port:\n%s", caddy)
 	}
 }
 
-func TestConfigureRepoContainerPortFromDockerfileWritesMissingPort(t *testing.T) {
+func TestConfigureRepoPortsFromDockerfileWritesMissingPorts(t *testing.T) {
 	root := newTestProject(t)
 	repoPath := filepath.Join(root, "apps", "api")
 	if err := os.MkdirAll(repoPath, 0o755); err != nil {
@@ -464,8 +463,8 @@ func TestConfigureRepoContainerPortFromDockerfileWritesMissingPort(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if repos[0].ContainerPort != 4321 {
-		t.Fatalf("container port = %d, want 4321", repos[0].ContainerPort)
+	if repos[0].Port != 4321 || repos[0].ContainerPort != 4321 {
+		t.Fatalf("ports = %d:%d, want 4321:4321", repos[0].Port, repos[0].ContainerPort)
 	}
 	if repos[0].Path != "apps/api" {
 		t.Fatalf("path should remain relative, got %q", repos[0].Path)
@@ -533,6 +532,47 @@ func TestPrepareRepoEnvPreservesExistingValues(t *testing.T) {
 	want := existing + "DATABASE_URL=\n"
 	if env != want {
 		t.Fatalf("env = %q, want %q", env, want)
+	}
+}
+
+func TestReadRepoEnvSchemaUsesJSONMetadata(t *testing.T) {
+	root := t.TempDir()
+	repoPath := filepath.Join(root, "apps", "api")
+	if err := os.MkdirAll(repoPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	schema := `{
+  "variables": [
+    {
+      "name": "API_KEY",
+      "description": "Token used to call the upstream API.",
+      "example": "sk_live_...",
+      "required": true
+    },
+    {
+      "name": "DATABASE_URL",
+      "description": "Postgres connection string.",
+      "example": "postgres://user:pass@db:5432/app"
+    }
+  ]
+}
+`
+	if err := os.WriteFile(filepath.Join(repoPath, envJSONSchemaFile), []byte(schema), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	variables, err := readRepoEnvSchema(repoPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(variables) != 2 {
+		t.Fatalf("variables = %#v", variables)
+	}
+	if variables[0].Key != "API_KEY" || variables[0].Description == "" || variables[0].Example == "" || !variables[0].Required {
+		t.Fatalf("API_KEY metadata = %#v", variables[0])
+	}
+	if variables[1].Key != "DATABASE_URL" || !variables[1].Required {
+		t.Fatalf("DATABASE_URL metadata = %#v", variables[1])
 	}
 }
 
@@ -741,6 +781,45 @@ func TestWebSaveRepoAllowsUpdatingOriginalRepo(t *testing.T) {
 	}
 	if repos[1].Name != "web" {
 		t.Fatalf("second repo = %#v", repos[1])
+	}
+}
+
+func TestWebDownloadEnvExportsRepoEnvironment(t *testing.T) {
+	root := newTestProject(t)
+	repoPath := filepath.Join(root, "apps", "api")
+	if err := os.MkdirAll(filepath.Join(repoPath, "config"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repoPath, envJSONSchemaFile), []byte(`{"variables":[{"name":"API_KEY"},{"name":"DATABASE_URL"}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repoPath, envFile), []byte("API_KEY=secret\nDATABASE_URL='postgres://db/app'\nEXTRA=value\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeTestRepos(t, root, []Repo{{
+		Name: "api",
+		URL:  "https://github.com/acme/api",
+		Path: "apps/api",
+		Env:  []string{"NODE_ENV=production"},
+	}})
+	app := &webApp{root: root}
+
+	response := getWeb(t, app, "/env/download")
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
+	}
+	body := response.Body.String()
+	for _, want := range []string{
+		"# [api]",
+		"API_KEY=secret",
+		"DATABASE_URL=postgres://db/app",
+		"NODE_ENV=production",
+		"EXTRA=value",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("export missing %q:\n%s", want, body)
+		}
 	}
 }
 

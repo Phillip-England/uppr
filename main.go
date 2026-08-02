@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -15,9 +16,10 @@ import (
 )
 
 const (
-	envFile       = "config/.env"
-	envSchemaFile = "env.schema"
-	reposFile     = "repos.conf"
+	envFile           = "config/.env"
+	envSchemaFile     = "env.schema"
+	envJSONSchemaFile = "schema.json"
+	reposFile         = "repos.conf"
 )
 
 type Repo struct {
@@ -39,6 +41,13 @@ type RateLimit struct {
 	Zone    string
 	Events  int
 	Window  string
+}
+
+type envSchemaVar struct {
+	Key         string
+	Description string
+	Example     string
+	Required    bool
 }
 
 func defaultRateLimit() RateLimit {
@@ -150,9 +159,10 @@ repos.conf format:
   env = NODE_ENV=production
   volume = ./cache:/app/cache
 
-App repos can include env.schema with one environment variable name per line.
-After pull/sync, uppr prepares apps/<repo>/config/.env with blank entries for
-missing schema keys while preserving existing values.`)
+App repos can include schema.json with environment variable metadata, or the
+legacy env.schema file with one environment variable name per line. After
+pull/sync, uppr prepares apps/<repo>/config/.env with blank entries for missing
+schema keys while preserving existing values.`)
 }
 
 func launchServer(args []string) error {
@@ -457,10 +467,20 @@ func pullReposAt(root string) error {
 		if port, err := readDockerfileExposedPort(filepath.Join(repo.Path, "Dockerfile")); err != nil {
 			failed = true
 			fmt.Fprintf(os.Stderr, "%s: %v\n", repoLabel(repo), err)
-		} else if port != 0 && repos[i].ContainerPort == 0 {
-			repos[i].ContainerPort = port
-			changed = true
-			fmt.Printf("[%s] configured container_port = %d from Dockerfile\n", repoLabel(repo), port)
+		} else if port != 0 {
+			changedRepo := false
+			if repos[i].Port == 0 {
+				repos[i].Port = port
+				changedRepo = true
+			}
+			if repos[i].ContainerPort == 0 {
+				repos[i].ContainerPort = port
+				changedRepo = true
+			}
+			if changedRepo {
+				changed = true
+				fmt.Printf("[%s] configured port and container_port = %d from Dockerfile\n", repoLabel(repo), port)
+			}
 		}
 	}
 	if changed {
@@ -869,12 +889,11 @@ func pullRepo(repo Repo, askPass string) error {
 }
 
 func prepareRepoEnv(repo Repo) error {
-	schemaPath := filepath.Join(repo.Path, envSchemaFile)
-	keys, err := readEnvSchema(schemaPath)
+	vars, err := readRepoEnvSchema(repo.Path)
 	if err != nil {
 		return err
 	}
-	if len(keys) == 0 {
+	if len(vars) == 0 {
 		return nil
 	}
 
@@ -894,15 +913,15 @@ func prepareRepoEnv(repo Repo) error {
 	body.WriteString(contents)
 
 	var added bool
-	for _, key := range keys {
-		if existingKeys[key] {
+	for _, variable := range vars {
+		if existingKeys[variable.Key] {
 			continue
 		}
 		if body.Len() > 0 && !strings.HasSuffix(body.String(), "\n") {
 			body.WriteString("\n")
 		}
-		fmt.Fprintf(&body, "%s=\n", key)
-		existingKeys[key] = true
+		fmt.Fprintf(&body, "%s=\n", variable.Key)
+		existingKeys[variable.Key] = true
 		added = true
 	}
 	if !added && fileExists(envPath) {
@@ -912,8 +931,76 @@ func prepareRepoEnv(repo Repo) error {
 	if err := os.WriteFile(envPath, []byte(body.String()), 0o600); err != nil {
 		return err
 	}
-	fmt.Printf("[%s] prepared %s from %s\n", repoLabel(repo), filepath.Join(repo.Path, envFile), envSchemaFile)
+	fmt.Printf("[%s] prepared %s from app environment schema\n", repoLabel(repo), filepath.Join(repo.Path, envFile))
 	return nil
+}
+
+func readRepoEnvSchema(repoPath string) ([]envSchemaVar, error) {
+	jsonPath := filepath.Join(repoPath, envJSONSchemaFile)
+	vars, err := readEnvJSONSchema(jsonPath)
+	if err != nil {
+		return nil, err
+	}
+	if len(vars) > 0 || fileExists(jsonPath) {
+		return vars, nil
+	}
+	keys, err := readEnvSchema(filepath.Join(repoPath, envSchemaFile))
+	if err != nil {
+		return nil, err
+	}
+	vars = make([]envSchemaVar, 0, len(keys))
+	for _, key := range keys {
+		vars = append(vars, envSchemaVar{Key: key, Required: true})
+	}
+	return vars, nil
+}
+
+func readEnvJSONSchema(path string) ([]envSchemaVar, error) {
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var raw struct {
+		Variables []struct {
+			Name        string `json:"name"`
+			Key         string `json:"key"`
+			Description string `json:"description"`
+			Example     string `json:"example"`
+			Required    *bool  `json:"required"`
+		} `json:"variables"`
+	}
+	if err := json.Unmarshal(contents, &raw); err != nil {
+		return nil, fmt.Errorf("%s: invalid JSON: %w", path, err)
+	}
+	vars := make([]envSchemaVar, 0, len(raw.Variables))
+	seen := map[string]bool{}
+	for i, variable := range raw.Variables {
+		key := strings.TrimSpace(variable.Name)
+		if key == "" {
+			key = strings.TrimSpace(variable.Key)
+		}
+		if !isEnvKey(key) {
+			return nil, fmt.Errorf("%s:variables[%d]: invalid environment variable name %q", path, i, key)
+		}
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		required := true
+		if variable.Required != nil {
+			required = *variable.Required
+		}
+		vars = append(vars, envSchemaVar{
+			Key:         key,
+			Description: strings.TrimSpace(variable.Description),
+			Example:     strings.TrimSpace(variable.Example),
+			Required:    required,
+		})
+	}
+	return vars, nil
 }
 
 func readEnvSchema(path string) ([]string, error) {
@@ -961,7 +1048,7 @@ func configureRepoContainerPortFromDockerfile(root string, index int) error {
 	if index < 0 || index >= len(repos) {
 		return fmt.Errorf("repo %d not found", index)
 	}
-	if repos[index].ContainerPort != 0 {
+	if repos[index].Port != 0 && repos[index].ContainerPort != 0 {
 		return nil
 	}
 
@@ -974,8 +1061,13 @@ func configureRepoContainerPortFromDockerfile(root string, index int) error {
 	if port == 0 {
 		return nil
 	}
-	repos[index].ContainerPort = port
-	fmt.Printf("[%s] configured container_port = %d from Dockerfile\n", repoLabel(resolvedRepos[index]), port)
+	if repos[index].Port == 0 {
+		repos[index].Port = port
+	}
+	if repos[index].ContainerPort == 0 {
+		repos[index].ContainerPort = port
+	}
+	fmt.Printf("[%s] configured port and container_port = %d from Dockerfile\n", repoLabel(resolvedRepos[index]), port)
 	return writeRepos(reposPath, repos)
 }
 

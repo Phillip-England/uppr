@@ -189,21 +189,37 @@ Apps can rely on `./config/.env` and `./data/main.sqlite` being available when
 their image uses `/app` as its working directory.
 
 When an app Dockerfile includes a line such as `EXPOSE 3000`, `uppr` can infer
-that app's internal container port. `uppr pull` writes the discovered value to
-`container_port` when it is missing, and `uppr generate` also uses the exposed
-port in memory for existing local checkouts.
+that app's port. `uppr pull` writes the discovered value to both `port` and
+`container_port` when either is missing, and `uppr generate` also uses the
+exposed port in memory for existing local checkouts.
 
-App repos can also include an `env.schema` file at the repo root:
+App repos can also include a `schema.json` file at the repo root:
 
-```text
-API_KEY
-DATABASE_URL
+```json
+{
+  "variables": [
+    {
+      "name": "API_KEY",
+      "description": "Secret token used to call the upstream API.",
+      "example": "sk_live_...",
+      "required": true
+    },
+    {
+      "name": "DATABASE_URL",
+      "description": "Postgres connection string used by the application.",
+      "example": "postgres://user:password@db:5432/app"
+    }
+  ]
+}
 ```
 
-During pull/sync, `uppr` reads `env.schema` and prepares
+During pull/sync, `uppr` reads `schema.json` and prepares
 `./apps/<app>/config/.env` with blank entries for any missing keys. Existing
 values in that `.env` file are preserved, so the admin only fills in values and
-does not need to remember each app's environment variable names.
+does not need to remember each app's environment variable names. The web UI also
+shows schema descriptions and examples while values are being filled in.
+Legacy `env.schema` files with one variable name per line are still supported.
+See `ENV_SCHEMA_JSON.md` for the schema contract to give other projects.
 
 The generated `Makefile` includes:
 
