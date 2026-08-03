@@ -60,6 +60,11 @@ while IFS= read -r workspace_path; do
 	if [[ -e ${workspace_path} ]]; then
 		echo "Repairing workspace ownership for ${workspace_path}..."
 		sudo chown -R -- "${service_user}:${service_group}" "${workspace_path}"
+		echo "Pulling repositories in ${workspace_path}..."
+		(
+			cd -- "${workspace_path}"
+			"${uppr_bin}" pull
+		)
 	fi
 done < <(
 	awk '

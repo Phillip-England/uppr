@@ -121,13 +121,15 @@ uses `CADDYX_PATH`. The service commands create `config/.env`, `data/`, and
 generated automatically. Set `UPPR_DOMAINS` to one or more comma-separated
 Caddy hostnames.
 
-`reload.sh` regenerates and validates the Caddy configuration, atomically
-rewrites `/etc/systemd/system/uppr.service` and
+`reload.sh` pulls every repository in every registered workspace, regenerates
+and validates the Caddy configuration, atomically rewrites `/etc/systemd/system/uppr.service` and
 `/etc/systemd/system/caddy.service`, reloads systemd, enables both units for
 startup, restarts them, and prints their resulting status. It also repairs
 ownership under the Uppr installation directory and every path registered in
 `workspaces.conf`, including workspaces stored outside the installation. This
-fixes files left behind by older root-running units.
+fixes files left behind by older root-running units. Repository pulls use
+`git pull --ff-only`; if any pull fails, reload stops before changing or
+restarting the services.
 
 If Docker itself reports `permission denied` for `/var/run/docker.sock`, add the
 operator account to the Docker group, then log out and back in so the new group
@@ -169,6 +171,31 @@ You can also edit `repos.conf` directly:
 [repo]
 url = https://github.com/phillip-england/some-repo
 ```
+
+## Back up and restore a complete state
+
+Export the current project (or server root) to one portable compressed artifact:
+
+```sh
+./uppr backup ./uppr-state.tar.gz
+```
+
+The artifact contains the app repositories themselves, including every app's
+`config/` and `data/` directories, plus Uppr configuration and runtime data.
+Against a server root it also includes workspaces stored outside that root. Stop
+or quiesce applications that are actively writing databases before backing up.
+
+Restore it on the same machine or copy it to another one:
+
+```sh
+./uppr restore ./uppr-state.tar.gz
+```
+
+An optional final path selects another root. Existing files with the same names
+are overwritten; unrelated files are retained. Server workspaces are restored
+beneath the destination machine's `UPPR_WORKSPACES_DIR` (or platform default),
+and `workspaces.conf` is rewritten with those portable paths. Run `uppr launch`
+after restoring to rebuild and start the applications.
 
 ## Manage repos
 

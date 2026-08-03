@@ -277,6 +277,78 @@ func TestEnsureEnvDefaultsDoesNotCreateKnownAdminCredentials(t *testing.T) {
 	}
 }
 
+func TestBackupAndRestoreProject(t *testing.T) {
+	source := newTestProject(t)
+	app := filepath.Join(source, "apps", "api")
+	if err := os.MkdirAll(filepath.Join(app, "config"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(app, "data"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(app, "config", ".env"), []byte("TOKEN=secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(app, "data", "main.sqlite"), []byte("database"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeTestRepos(t, source, []Repo{{Name: "api", URL: "https://github.com/acme/api", Path: "apps/api"}})
+
+	artifact := filepath.Join(t.TempDir(), "state.tar.gz")
+	if err := backupState([]string{artifact, source}); err != nil {
+		t.Fatal(err)
+	}
+	destination := t.TempDir()
+	if err := restoreState([]string{artifact, destination}); err != nil {
+		t.Fatal(err)
+	}
+	if got := readTestFile(t, filepath.Join(destination, "apps", "api", "config", ".env")); got != "TOKEN=secret\n" {
+		t.Fatalf("restored env = %q", got)
+	}
+	if got := readTestFile(t, filepath.Join(destination, "apps", "api", "data", "main.sqlite")); got != "database" {
+		t.Fatalf("restored database = %q", got)
+	}
+}
+
+func TestBackupAndRestoreServerRelocatesWorkspaces(t *testing.T) {
+	server := newTestProject(t)
+	workspace := filepath.Join(t.TempDir(), "source-workspace")
+	if err := os.MkdirAll(filepath.Join(workspace, "apps", "api", "data"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, reposFile), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "apps", "api", "data", "main.sqlite"), []byte("state"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeWorkspaces(filepath.Join(server, workspacesFile), []Workspace{{Name: "production", Path: workspace}}); err != nil {
+		t.Fatal(err)
+	}
+
+	artifact := filepath.Join(t.TempDir(), "server.tar.gz")
+	if err := backupState([]string{artifact, server}); err != nil {
+		t.Fatal(err)
+	}
+	destination := t.TempDir()
+	workspaceRoot := filepath.Join(t.TempDir(), "relocated")
+	t.Setenv(workspacesDirEnv, workspaceRoot)
+	if err := restoreState([]string{artifact, destination}); err != nil {
+		t.Fatal(err)
+	}
+	restored, err := readWorkspaces(filepath.Join(destination, workspacesFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantPath := filepath.Join(workspaceRoot, "production")
+	if len(restored) != 1 || restored[0].Path != wantPath {
+		t.Fatalf("restored workspaces = %#v, want path %q", restored, wantPath)
+	}
+	if got := readTestFile(t, filepath.Join(wantPath, "apps", "api", "data", "main.sqlite")); got != "state" {
+		t.Fatalf("restored workspace database = %q", got)
+	}
+}
+
 func TestReadReposDefaultsNameAndPath(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "repos.conf")
