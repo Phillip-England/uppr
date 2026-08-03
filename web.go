@@ -463,6 +463,9 @@ func (app *webApp) handleAddRepo(w http.ResponseWriter, r *http.Request) {
 		app.renderRepos(w, indexPage{NewRepo: repo, Error: err.Error()})
 		return
 	}
+	// The compact onboarding form does not expose runtime controls. New apps
+	// therefore start protected and can still be explicitly opted out later.
+	repo.RateLimit = defaultRateLimit()
 	if err := validateNewRepo(repo, repos); err != nil {
 		app.renderRepos(w, indexPage{NewRepo: repo, Error: err.Error()})
 		return
@@ -808,12 +811,24 @@ func (app *webApp) renderSync(w http.ResponseWriter, page syncPage) {
 		page.Repos = nil
 		page.Items = nil
 		workspaces, workspaceErr := readWorkspaces(filepath.Join(app.root, workspacesFile))
-		if workspaceErr != nil && page.Error == "" { page.Error = workspaceErr.Error() }
+		if workspaceErr != nil && page.Error == "" {
+			page.Error = workspaceErr.Error()
+		}
 		for _, workspace := range workspaces {
 			_, root, resolveErr := resolveWorkspace(app.root, workspace.Name)
-			if resolveErr != nil { if page.Error == "" { page.Error = resolveErr.Error() }; continue }
+			if resolveErr != nil {
+				if page.Error == "" {
+					page.Error = resolveErr.Error()
+				}
+				continue
+			}
 			workspaceRepos, readErr := readRepos(filepath.Join(root, reposFile))
-			if readErr != nil { if page.Error == "" { page.Error = readErr.Error() }; continue }
+			if readErr != nil {
+				if page.Error == "" {
+					page.Error = readErr.Error()
+				}
+				continue
+			}
 			for index, repo := range workspaceRepos {
 				page.Items = append(page.Items, syncItem{Workspace: workspace.Name, Root: root, BasePath: "/workspaces/" + url.PathEscape(workspace.Name), Index: index, Repo: repo})
 			}
@@ -878,8 +893,8 @@ func (app *webApp) handleLaunch(w http.ResponseWriter, r *http.Request) {
 	if app.serverRoot != "" {
 		// The server control plane is native; its Compose project contains apps only.
 		root = app.serverRoot
-		command = "docker compose down --remove-orphans && docker compose up --build -d --remove-orphans && caddyx reload --config Caddyfile --adapter caddyfile"
-		notice = "Launch replaces only the managed app containers, then reloads native Caddy. Uppr remains available throughout. Named volumes are preserved."
+		command = "uppr launch ."
+		notice = "Launch regenerates all runtime files, replaces only the managed app containers, then reloads (or starts) native Caddy. Uppr remains available throughout. Named volumes are preserved."
 	}
 	page := launchPage{Root: root, BasePath: app.basePath, Message: r.URL.Query().Get("message"), Command: command, Notice: notice}
 	if err := launchTemplate.Execute(w, page); err != nil {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -23,7 +24,11 @@ func printUpprService(args []string) error {
 		return err
 	}
 	executable, _ = filepath.Abs(executable)
-	fmt.Print(renderUpprSystemdService(root, executable))
+	account, err := currentServiceAccount()
+	if err != nil {
+		return err
+	}
+	fmt.Print(renderUpprSystemdService(root, executable, account))
 	return nil
 }
 
@@ -35,18 +40,23 @@ func printCaddyService(args []string) error {
 	if err := bootstrapServiceRoot(root); err != nil {
 		return err
 	}
-	// Keep stdout clean because callers redirect it directly to a unit file.
-	if err := writeServerFilesAt(root); err != nil {
-		return err
-	}
 	if err := os.MkdirAll(filepath.Join(root, "data", "caddy"), 0o755); err != nil {
 		return err
 	}
+	executable, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	executable, _ = filepath.Abs(executable)
 	caddy, err := findCaddyx()
 	if err != nil {
 		return err
 	}
-	fmt.Print(renderCaddySystemdService(root, caddy))
+	account, err := currentServiceAccount()
+	if err != nil {
+		return err
+	}
+	fmt.Print(renderCaddySystemdService(root, executable, caddy, account))
 	return nil
 }
 
@@ -111,9 +121,22 @@ func reloadCaddy(root string) error {
 		return nil
 	}
 	cmd := exec.Command(caddy, "reload", "--config", filepath.Join(root, caddyFile), "--adapter", "caddyfile")
-	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("apps launched but reload Caddy: %w", err)
+	output, reloadErr := cmd.CombinedOutput()
+	if reloadErr != nil {
+		// A first launch has no admin API to reload. Start Caddy with the newly
+		// generated configuration in that case; subsequent launches stay on the
+		// zero-downtime reload path above.
+		start := exec.Command(caddy, "start", "--config", filepath.Join(root, caddyFile), "--adapter", "caddyfile")
+		start.Stdout, start.Stderr = os.Stdout, os.Stderr
+		if startErr := start.Run(); startErr != nil {
+			detail := strings.TrimSpace(string(output))
+			if detail != "" {
+				return fmt.Errorf("apps launched but Caddy could neither reload (%v: %s) nor start: %w", reloadErr, detail, startErr)
+			}
+			return fmt.Errorf("apps launched but Caddy could neither reload (%v) nor start: %w", reloadErr, startErr)
+		}
+	} else if len(output) != 0 {
+		_, _ = os.Stdout.Write(output)
 	}
 	return nil
 }
@@ -191,7 +214,25 @@ func envOrDefault(values map[string]string, key, fallback string) string {
 	return fallback
 }
 
-func renderUpprSystemdService(root, executable string) string {
+type serviceAccount struct {
+	User  string
+	Group string
+	Home  string
+}
+
+func currentServiceAccount() (serviceAccount, error) {
+	current, err := user.Current()
+	if err != nil {
+		return serviceAccount{}, fmt.Errorf("determine service user: %w", err)
+	}
+	group, err := user.LookupGroupId(current.Gid)
+	if err != nil {
+		return serviceAccount{}, fmt.Errorf("determine service group: %w", err)
+	}
+	return serviceAccount{User: current.Username, Group: group.Name, Home: current.HomeDir}, nil
+}
+
+func renderUpprSystemdService(root, executable string, account serviceAccount) string {
 	q := func(value string) string {
 		return strconv.Quote(strings.ReplaceAll(value, "%", "%%"))
 	}
@@ -216,18 +257,22 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+User=%s
+Group=%s
+Environment=HOME=%s
+UMask=0022
 Restart=always
 RestartSec=5
 WorkingDirectory=%s
 EnvironmentFile=%s
-ExecStart=%s serve --addr 0.0.0.0:9944 %s
+ExecStart=%s service-run %s
 
 [Install]
 WantedBy=multi-user.target
-	`, pathValue(root), pathValue(filepath.Join(root, envFile)), q(executable), q(root))
+`, account.User, account.Group, q(account.Home), pathValue(root), pathValue(filepath.Join(root, envFile)), q(executable), q(root))
 }
 
-func renderCaddySystemdService(root, caddy string) string {
+func renderCaddySystemdService(root, executable, caddy string, account serviceAccount) string {
 	q := func(value string) string { return strconv.Quote(strings.ReplaceAll(value, "%", "%%")) }
 	return fmt.Sprintf(`[Unit]
 Description=Uppr Caddy reverse proxy
@@ -236,6 +281,11 @@ Wants=network-online.target
 
 [Service]
 Type=notify
+User=%s
+Group=%s
+Environment=HOME=%s
+UMask=0022
+ExecStartPre=%s generate-server %s
 ExecStart=%s run --environ --config %s --adapter caddyfile
 ExecReload=%s reload --config %s --adapter caddyfile --force
 TimeoutStopSec=5s
@@ -244,12 +294,12 @@ AmbientCapabilities=CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 PrivateTmp=true
 ProtectSystem=full
-ReadWritePaths=%s
+ReadWritePaths=%s %s
 Environment=XDG_DATA_HOME=%s
 Environment=XDG_CONFIG_HOME=%s
 
 [Install]
 WantedBy=multi-user.target
-`, q(caddy), q(filepath.Join(root, caddyFile)), q(caddy), q(filepath.Join(root, caddyFile)),
-		q(filepath.Join(root, "data", "caddy")), q(filepath.Join(root, "data", "caddy")), q(filepath.Join(root, "data", "caddy")))
+`, account.User, account.Group, q(account.Home), q(executable), q(root), q(caddy), q(filepath.Join(root, caddyFile)), q(caddy), q(filepath.Join(root, caddyFile)),
+		q(root), q(filepath.Join(root, "data", "caddy")), q(filepath.Join(root, "data", "caddy")), q(filepath.Join(root, "data", "caddy")))
 }

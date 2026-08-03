@@ -32,3 +32,14 @@ www.phillip-england.com, phillip-england.com {
 	}
 	reverse_proxy 127.0.0.1:8112
 }
+
+receiptupload.online, www.receiptupload.online {
+	rate_limit {
+		zone dynamic {
+			key {remote_host}
+			events 100
+			window 1m
+		}
+	}
+	reverse_proxy 127.0.0.1:8725
+}

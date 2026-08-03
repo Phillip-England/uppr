@@ -47,10 +47,14 @@ func TestRunServeCommandUsesServe(t *testing.T) {
 
 func TestRenderUpprSystemdServiceRunsUpprNatively(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "uppr root")
-	unit := renderUpprSystemdService(root, "/usr/local/bin/uppr")
+	account := serviceAccount{User: "uppr-user", Group: "uppr-group", Home: "/home/uppr-user"}
+	unit := renderUpprSystemdService(root, "/usr/local/bin/uppr", account)
 	for _, want := range []string{
+		`User=uppr-user`,
+		`Group=uppr-group`,
+		`Environment=HOME="/home/uppr-user"`,
 		`WorkingDirectory=` + strings.ReplaceAll(root, " ", `\x20`),
-		`ExecStart="/usr/local/bin/uppr" serve --addr 0.0.0.0:9944 "` + root + `"`,
+		`ExecStart="/usr/local/bin/uppr" service-run "` + root + `"`,
 	} {
 		if !strings.Contains(unit, want) {
 			t.Fatalf("unit missing %q:\n%s", want, unit)
@@ -63,8 +67,13 @@ func TestRenderUpprSystemdServiceRunsUpprNatively(t *testing.T) {
 
 func TestRenderCaddySystemdServiceRunsCaddyxNatively(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "uppr root")
-	unit := renderCaddySystemdService(root, "/opt/uppr/caddyx")
+	account := serviceAccount{User: "uppr-user", Group: "uppr-group", Home: "/home/uppr-user"}
+	unit := renderCaddySystemdService(root, "/usr/local/bin/uppr", "/opt/uppr/caddyx", account)
 	for _, want := range []string{
+		`User=uppr-user`,
+		`Group=uppr-group`,
+		`Environment=HOME="/home/uppr-user"`,
+		`ExecStartPre="/usr/local/bin/uppr" generate-server "` + root + `"`,
 		`ExecStart="/opt/uppr/caddyx" run`,
 		`ExecReload="/opt/uppr/caddyx" reload`,
 		"AmbientCapabilities=CAP_NET_BIND_SERVICE",
@@ -346,6 +355,9 @@ func TestAddRepoWritesReposConf(t *testing.T) {
 	}
 	if !reflect.DeepEqual(repos[0], Repo{Name: "api", URL: "https://github.com/acme/service", Path: "services/api", Branch: "main", RateLimit: defaultRateLimit()}) {
 		t.Fatalf("repo = %#v", repos[0])
+	}
+	if !repos[0].RateLimit.Enabled {
+		t.Fatal("new CLI repo should be rate limited by default")
 	}
 }
 
@@ -1367,8 +1379,8 @@ func TestWebLaunchReplacesAppsWhileNativeUpprStaysRunning(t *testing.T) {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
 	}
 	body := response.Body.String()
-	if !strings.Contains(body, `docker compose down --remove-orphans &amp;&amp; docker compose up --build -d --remove-orphans &amp;&amp; caddyx reload`) {
-		t.Fatalf("remote launch should replace apps and reload Caddy:\n%s", body)
+	if !strings.Contains(body, `data-terminal-command="uppr launch ."`) {
+		t.Fatalf("remote launch should regenerate files, replace apps, and reload Caddy:\n%s", body)
 	}
 	if !strings.Contains(body, `<code class="mono">`+serverRoot+`</code>`) {
 		t.Fatalf("remote launch should run from server root %q:\n%s", serverRoot, body)
@@ -1518,6 +1530,7 @@ func TestGenerateServerFilesBuildsSingleRootCompose(t *testing.T) {
 		Path:          "apps/api",
 		Port:          8080,
 		ContainerPort: 3000,
+		RateLimit:     defaultRateLimit(),
 	}})
 
 	if err := generateServerFilesAt(root); err != nil {
@@ -1539,7 +1552,7 @@ func TestGenerateServerFilesBuildsSingleRootCompose(t *testing.T) {
 		t.Fatalf("unexpected master compose:\n%s", masterCompose)
 	}
 	masterMakefile := readTestFile(t, filepath.Join(root, makeFile))
-	if !strings.Contains(masterMakefile, "docker compose down --remove-orphans") || !strings.Contains(masterMakefile, "caddyx reload --config Caddyfile") {
+	if !strings.Contains(masterMakefile, "uppr launch .") {
 		t.Fatalf("master launch should replace apps and reload native Caddy:\n%s", masterMakefile)
 	}
 	masterCaddy := readTestFile(t, filepath.Join(root, caddyFile))
@@ -1547,6 +1560,7 @@ func TestGenerateServerFilesBuildsSingleRootCompose(t *testing.T) {
 		!strings.Contains(masterCaddy, "zone uppr {") ||
 		!strings.Contains(masterCaddy, "reverse_proxy 127.0.0.1:9944") ||
 		!strings.Contains(masterCaddy, "api.localhost {") ||
+		!strings.Contains(masterCaddy, "zone dynamic {") ||
 		!strings.Contains(masterCaddy, "reverse_proxy 127.0.0.1:8080") {
 		t.Fatalf("unexpected master Caddyfile:\n%s", masterCaddy)
 	}

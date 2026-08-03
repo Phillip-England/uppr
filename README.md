@@ -98,13 +98,20 @@ Uppr and Caddy run as independent native services. Docker Compose contains only
 the managed applications, so replacing the app stack cannot stop the UI or
 reverse proxy that initiated the replacement.
 
-Build the rate-limit-enabled Caddy binary, then generate both units:
+Build the rate-limit-enabled Caddy binary, then generate, install, enable, and
+start both units:
 
 ```sh
 ./uppr install-caddyx
-./uppr service-uppr . > uppr.service
-./uppr service-caddy . > uppr-caddy.service
+./reload.sh
 ```
+
+Run `reload.sh` as the ordinary account that installed and will operate Uppr;
+do not run the whole script with `sudo`. It uses `sudo` only to repair ownership
+of this installation, install the root-owned systemd unit files, and control the
+services. Both services themselves run as that ordinary user, so generated
+files remain editable without `sudo`. That user must have access to Docker
+(normally through membership in the `docker` group).
 
 `install-caddyx` writes `~/.local/bin/caddyx` by default; pass a destination
 path to override it. `service-caddy` finds that location, searches `PATH`, or
@@ -114,21 +121,22 @@ uses `CADDYX_PATH`. The service commands create `config/.env`, `data/`, and
 generated automatically. Set `UPPR_DOMAINS` to one or more comma-separated
 Caddy hostnames.
 
-Install the printed unit manually:
+`reload.sh` regenerates and validates the Caddy configuration, atomically
+rewrites `/etc/systemd/system/uppr.service` and
+`/etc/systemd/system/caddy.service`, reloads systemd, enables both units for
+startup, restarts them, and prints their resulting status. It also repairs
+ownership under the Uppr installation directory, which fixes files left behind
+by older root-running units.
 
-```sh
-sudo cp uppr.service /etc/systemd/system/uppr.service
-sudo cp uppr-caddy.service /etc/systemd/system/uppr-caddy.service
-sudo systemctl daemon-reload
-sudo systemctl enable --now uppr uppr-caddy
-```
-
-The Uppr unit runs the current executable directly on port 9944. The Caddy unit
-runs `caddyx` directly on ports 80 and 443. Managed app ports are published by
-Docker only on `127.0.0.1`, and the generated Caddyfile proxies to those
-loopback ports. After changing an app, `uppr launch` (or Launch in the web UI)
-can safely replace every app container while both control-plane services remain
-available.
+The Uppr unit regenerates the root runtime files, launches the managed app
+containers, and then runs the current executable directly on port 9944. The
+Caddy unit regenerates once more immediately before it runs `caddyx` directly
+on ports 80 and 443, so boot never depends on stale generated files. Managed
+app ports are published by Docker only on `127.0.0.1`, and the generated
+Caddyfile proxies to those loopback ports. After changing or onboarding an app,
+`uppr launch` (or Launch in the web UI) regenerates everything, safely replaces
+every app container, and reloads Caddy while Uppr remains available. On a first
+launch where Caddy is not running yet, Uppr starts it instead.
 
 Uppr's public route is rate limited by client IP. The default permits 100
 requests per minute; use `UPPR_RATE_LIMIT_ENABLED`, `UPPR_RATE_LIMIT_EVENTS`,
@@ -189,7 +197,7 @@ port = 3000
 container_port = 3000
 domain = some-repo.localhost
 domain = www.some-repo.localhost
-rate_limit_enabled = false
+rate_limit_enabled = true
 rate_limit_zone = dynamic
 rate_limit_events = 100
 rate_limit_window = 1m
@@ -205,7 +213,8 @@ Runtime settings:
   first `EXPOSE` port from the app's `Dockerfile` when available, otherwise
   `port` is used.
 - `domain`: repeatable Caddy hostname. If omitted, `uppr` uses `<name>.localhost`.
-- `rate_limit_enabled`: enables app-level Caddy rate limiting.
+- `rate_limit_enabled`: enables app-level Caddy rate limiting. Defaults to `true`
+  for every newly added application; set it to `false` to explicitly opt out.
 - `rate_limit_zone`: Caddy rate-limit zone name. Defaults to `dynamic`.
 - `rate_limit_events`: allowed events per window. Defaults to `100`.
 - `rate_limit_window`: rate-limit window such as `1m` or `30s`. Defaults to `1m`.
@@ -288,9 +297,9 @@ At the server root, launch the whole system with:
 
 `uppr launch` creates any missing server files, regenerates the root runtime
 files from all registered workspaces, clears that Compose project's existing
-containers and orphans (while preserving named volumes), and runs
-`docker compose up --build` from
-the server root.
+containers and orphans (while preserving named volumes), runs
+`docker compose up --build` from the server root, and then reloads Caddy with
+the new configuration (or starts Caddy when it is not running yet).
 
 You can generate the root runtime files without launching Docker with:
 

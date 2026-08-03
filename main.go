@@ -53,7 +53,7 @@ type envSchemaVar struct {
 
 func defaultRateLimit() RateLimit {
 	return RateLimit{
-		Enabled: false,
+		Enabled: true,
 		Zone:    "dynamic",
 		Events:  100,
 		Window:  "1m",
@@ -165,7 +165,7 @@ repos.conf format:
   port = 3000
   domain = example.localhost
   domain = www.example.localhost
-  rate_limit_enabled = false
+  rate_limit_enabled = true
   rate_limit_zone = dynamic
   rate_limit_events = 100
   rate_limit_window = 1m
@@ -293,7 +293,7 @@ func parseAddRepoArgs(args []string) (Repo, error) {
 		return Repo{}, errors.New("usage: uppr add <url> [--name <name>] [--path <path>] [--branch <branch>]")
 	}
 
-	repo := Repo{URL: args[0]}
+	repo := Repo{URL: args[0], RateLimit: defaultRateLimit()}
 	if strings.HasPrefix(repo.URL, "-") {
 		return Repo{}, errors.New("usage: uppr add <url> [--name <name>] [--path <path>] [--branch <branch>]")
 	}
@@ -720,7 +720,7 @@ func readRepos(path string) ([]Repo, error) {
 			continue
 		}
 		if line == "[repo]" {
-			repos = append(repos, Repo{})
+			repos = append(repos, Repo{RateLimit: defaultRateLimit()})
 			current = &repos[len(repos)-1]
 			continue
 		}

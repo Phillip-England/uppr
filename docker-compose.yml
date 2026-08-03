@@ -24,3 +24,15 @@ services:
     volumes:
       - "/home/deploy/.local/share/uppr/workspaces/personal/apps/portfolio/config:/app/config"
       - "/home/deploy/.local/share/uppr/workspaces/personal/apps/portfolio/data:/app/data"
+
+  chickfila-receipt-upload:
+    build:
+      context: "./data/workspaces/chickfila/apps/receipt-upload"
+    restart: unless-stopped
+    env_file:
+      - "./data/workspaces/chickfila/apps/receipt-upload/config/.env"
+    ports:
+      - "127.0.0.1:8725:8725"
+    volumes:
+      - "./data/workspaces/chickfila/apps/receipt-upload/config:/app/config"
+      - "./data/workspaces/chickfila/apps/receipt-upload/data:/app/data"

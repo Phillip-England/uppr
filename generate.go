@@ -448,9 +448,7 @@ func renderServerMakefile(workspaces []Workspace) string {
 	uppr generate-server
 
 launch: generate
-	docker compose down --remove-orphans
-	docker compose up --build -d --remove-orphans
-	caddyx reload --config Caddyfile --adapter caddyfile
+	uppr launch .
 
 stop:
 	docker compose down
