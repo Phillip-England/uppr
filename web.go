@@ -267,6 +267,7 @@ func (app *webApp) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/login", app.handleLogin)
 	mux.HandleFunc("/logout", app.handleLogout)
+	mux.HandleFunc("/developers", app.handleDevelopers)
 	mux.HandleFunc("/", app.handleIndex)
 	mux.HandleFunc("/workspaces", app.handleWorkspaces)
 	mux.HandleFunc("/workspaces/", app.handleWorkspaceRoute)
@@ -297,11 +298,11 @@ func (app *webApp) handleIndex(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if app.isServerMode() {
-		app.renderWorkspaces(w, workspacesPage{Message: r.URL.Query().Get("message")})
+	if !app.authRequired {
+		http.Redirect(w, r, app.routePath("/repos"), http.StatusSeeOther)
 		return
 	}
-	http.Redirect(w, r, app.routePath("/repos"), http.StatusSeeOther)
+	renderPublicPage(w, publicHomeTemplate)
 }
 
 func (app *webApp) isServerMode() bool {
@@ -894,7 +895,7 @@ func (app *webApp) handleLaunch(w http.ResponseWriter, r *http.Request) {
 		// The server control plane is native; its Compose project contains apps only.
 		root = app.serverRoot
 		command = "uppr launch ."
-		notice = "Launch regenerates all runtime files, replaces only the managed app containers, then reloads (or starts) native Caddy. Uppr remains available throughout. Named volumes are preserved."
+		notice = "Launch regenerates all runtime files, replaces the managed app containers, waits for them to be ready, then validates and force-reloads (or starts) native Caddy. Uppr remains available throughout. Named volumes are preserved."
 	}
 	page := launchPage{Root: root, BasePath: app.basePath, Message: r.URL.Query().Get("message"), Command: command, Notice: notice}
 	if err := launchTemplate.Execute(w, page); err != nil {

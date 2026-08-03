@@ -125,8 +125,22 @@ Caddy hostnames.
 rewrites `/etc/systemd/system/uppr.service` and
 `/etc/systemd/system/caddy.service`, reloads systemd, enables both units for
 startup, restarts them, and prints their resulting status. It also repairs
-ownership under the Uppr installation directory, which fixes files left behind
-by older root-running units.
+ownership under the Uppr installation directory and every path registered in
+`workspaces.conf`, including workspaces stored outside the installation. This
+fixes files left behind by older root-running units.
+
+If Docker itself reports `permission denied` for `/var/run/docker.sock`, add the
+operator account to the Docker group, then log out and back in so the new group
+is present in the login session:
+
+```sh
+sudo usermod -aG docker "$USER"
+```
+
+Do not run `uppr`, `uppr launch`, or the whole `reload.sh` with `sudo`; doing so
+creates root-owned generated files and workspace contents. The narrow `sudo`
+prompts inside `reload.sh` are expected because systemd unit installation and
+ownership repair are privileged operations.
 
 The Uppr unit regenerates the root runtime files, launches the managed app
 containers, and then runs the current executable directly on port 9944. The
@@ -298,8 +312,11 @@ At the server root, launch the whole system with:
 `uppr launch` creates any missing server files, regenerates the root runtime
 files from all registered workspaces, clears that Compose project's existing
 containers and orphans (while preserving named volumes), runs
-`docker compose up --build` from the server root, and then reloads Caddy with
-the new configuration (or starts Caddy when it is not running yet).
+`docker compose up --build` from the server root, waits until every container is
+running (and healthy when it has a healthcheck), and then validates and
+force-reloads Caddy with the new configuration (or starts Caddy when it is not
+running yet). A crashing container or failed Caddy refresh makes launch fail
+instead of displaying a false success.
 
 You can generate the root runtime files without launching Docker with:
 

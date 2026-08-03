@@ -191,7 +191,12 @@ func ensureAuthDBFile(root string) error {
 		return err
 	}
 	defer db.Close()
-	return initAuthDB(db)
+	if err := initAuthDB(db); err != nil {
+		return err
+	}
+	// SQLite creates files using the process umask. Keep login/IP data private
+	// even when Uppr was started from a shell with a permissive umask.
+	return os.Chmod(path, 0o600)
 }
 
 func (app *webApp) handleLogin(w http.ResponseWriter, r *http.Request) {
@@ -263,7 +268,7 @@ func (app *webApp) handleLogout(w http.ResponseWriter, r *http.Request) {
 
 func (app *webApp) requireAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !app.authRequired || r.URL.Path == "/login" {
+		if !app.authRequired || r.URL.Path == "/" || r.URL.Path == "/developers" || r.URL.Path == "/login" {
 			next.ServeHTTP(w, r)
 			return
 		}

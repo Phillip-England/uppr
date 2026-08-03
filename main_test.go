@@ -236,6 +236,28 @@ func ensureTestServerFiles(root string) error {
 	return ensureServerFiles(root)
 }
 
+func TestEnsureAuthDBFileMakesDatabasePrivate(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, defaultDBPath)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ensureAuthDBFile(root); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("database permissions = %04o, want 0600", got)
+	}
+}
+
 func TestEnsureEnvDefaultsDoesNotCreateKnownAdminCredentials(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, ".env")
@@ -992,17 +1014,55 @@ func TestWebDeleteRepoRemovesOnlySelectedRepo(t *testing.T) {
 	}
 }
 
-func TestWebIndexRedirectsToRepos(t *testing.T) {
+func TestWebIndexIsPublicOverview(t *testing.T) {
 	root := newTestProject(t)
-	app := &webApp{root: root}
+	app := &webApp{root: root, authRequired: true, sessions: newSessionStore()}
 
 	response := getWeb(t, app, "/")
 
-	if response.Code != http.StatusSeeOther {
-		t.Fatalf("status = %d, want %d", response.Code, http.StatusSeeOther)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
 	}
-	if location := response.Header().Get("Location"); location != "/repos" {
-		t.Fatalf("location = %q", location)
+	if body := response.Body.String(); !strings.Contains(body, "Give every app the same operational shape") || strings.Contains(body, `href="/login"`) {
+		t.Fatalf("unexpected public page:\n%s", body)
+	}
+}
+
+func TestLocalWebIndexStillOpensRepos(t *testing.T) {
+	app := &webApp{root: newTestProject(t)}
+	response := getWeb(t, app, "/")
+	if response.Code != http.StatusSeeOther || response.Header().Get("Location") != "/repos" {
+		t.Fatalf("status=%d location=%q", response.Code, response.Header().Get("Location"))
+	}
+}
+
+func TestDumpWritesIntegrationGuide(t *testing.T) {
+	dir := t.TempDir()
+	if err := dumpIntegrationGuide([]string{dir}); err != nil {
+		t.Fatal(err)
+	}
+	guide := readTestFile(t, filepath.Join(dir, integrationGuideFile))
+	for _, want := range []string{"config/.env", "data/main.sqlite", "schema.json", "Dockerfile", "EXPOSE <port>", "/app/config", "/app/data"} {
+		if !strings.Contains(guide, want) {
+			t.Fatalf("guide missing %q:\n%s", want, guide)
+		}
+	}
+}
+
+func TestPublicPagesBypassAuthentication(t *testing.T) {
+	app := &webApp{root: t.TempDir(), authRequired: true, sessions: newSessionStore()}
+	for _, path := range []string{"/", "/developers"} {
+		response := getWeb(t, app, path)
+		if response.Code != http.StatusOK {
+			t.Fatalf("GET %s status = %d, want %d", path, response.Code, http.StatusOK)
+		}
+		if strings.Contains(response.Body.String(), `href="/login"`) {
+			t.Fatalf("GET %s advertises login", path)
+		}
+	}
+	response := getWeb(t, app, "/workspaces")
+	if response.Code != http.StatusSeeOther || response.Header().Get("Location") != "/login" {
+		t.Fatalf("private route status=%d location=%q", response.Code, response.Header().Get("Location"))
 	}
 }
 

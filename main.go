@@ -91,6 +91,8 @@ func runWithServe(args []string, serve func([]string) error) error {
 		return pushRepos(args[1:])
 	case "generate", "gen":
 		return generateProjectFiles()
+	case "dump":
+		return dumpIntegrationGuide(args[1:])
 	case "generate-server":
 		root := "."
 		if len(args) > 2 {
@@ -141,6 +143,7 @@ Usage:
   uppr pull                       clone missing repos and pull existing repos
   uppr push <message>             commit changes in each repo and push
   uppr generate                   write Caddyfile, docker-compose.yml, and Makefile
+  uppr dump [path]                write UPPR.md integration instructions for an AI agent
   uppr generate-server [path]     write master Caddy/Compose/Make files
   uppr launch [path]              rebuild and launch the managed app containers
   uppr install-caddyx [path]      build Caddy with rate limiting (default ~/.local/bin/caddyx)
@@ -204,13 +207,17 @@ func launchServer(args []string) error {
 	if err := cleanup.Run(); err != nil {
 		return fmt.Errorf("clear existing Docker Compose stack: %w", err)
 	}
-	cmd := exec.Command("docker", "compose", "up", "--build", "-d", "--remove-orphans")
+	// Detached Compose starts can return successfully while a container is
+	// immediately crashing and being restarted. Wait until every service is
+	// running (and healthy when it defines a healthcheck) before refreshing the
+	// public proxy configuration.
+	cmd := exec.Command("docker", "compose", "up", "--build", "-d", "--remove-orphans", "--wait", "--wait-timeout", "120")
 	cmd.Dir = absRoot
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
-		return err
+		return fmt.Errorf("launch Docker Compose services and wait for readiness: %w", err)
 	}
 	return reloadCaddy(absRoot)
 }

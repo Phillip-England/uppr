@@ -117,16 +117,27 @@ func findCaddyx() (string, error) {
 func reloadCaddy(root string) error {
 	caddy, err := findCaddyx()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "uppr: apps launched; Caddy was not reloaded:", err)
-		return nil
+		return fmt.Errorf("apps launched but Caddy could not be reloaded: %w", err)
 	}
-	cmd := exec.Command(caddy, "reload", "--config", filepath.Join(root, caddyFile), "--adapter", "caddyfile")
+	config := filepath.Join(root, caddyFile)
+	validate := exec.Command(caddy, "validate", "--config", config, "--adapter", "caddyfile")
+	if output, validateErr := validate.CombinedOutput(); validateErr != nil {
+		detail := strings.TrimSpace(string(output))
+		if detail != "" {
+			return fmt.Errorf("apps launched but Caddy configuration is invalid: %w: %s", validateErr, detail)
+		}
+		return fmt.Errorf("apps launched but Caddy configuration is invalid: %w", validateErr)
+	}
+	// --force guarantees that Caddy reprovisions the generated configuration,
+	// even when its adapted JSON is otherwise unchanged. This mirrors the
+	// systemd unit's ExecReload behavior.
+	cmd := exec.Command(caddy, "reload", "--config", config, "--adapter", "caddyfile", "--force")
 	output, reloadErr := cmd.CombinedOutput()
 	if reloadErr != nil {
 		// A first launch has no admin API to reload. Start Caddy with the newly
 		// generated configuration in that case; subsequent launches stay on the
 		// zero-downtime reload path above.
-		start := exec.Command(caddy, "start", "--config", filepath.Join(root, caddyFile), "--adapter", "caddyfile")
+		start := exec.Command(caddy, "start", "--config", config, "--adapter", "caddyfile")
 		start.Stdout, start.Stderr = os.Stdout, os.Stderr
 		if startErr := start.Run(); startErr != nil {
 			detail := strings.TrimSpace(string(output))
