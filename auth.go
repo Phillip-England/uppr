@@ -56,6 +56,13 @@ func defaultEnvContents() []byte {
 		"ADMIN_PASSWORD=",
 		"SESSION_SECRET=" + secret,
 		"ADDR=:9944",
+		"UPPR_DOMAINS=uppr.localhost",
+		"UPPR_DOCKER_IMAGE=uppr:local",
+		"UPPR_DOCKER_NETWORK=uppr-network",
+		"UPPR_RATE_LIMIT_ENABLED=true",
+		"UPPR_RATE_LIMIT_ZONE=uppr",
+		"UPPR_RATE_LIMIT_EVENTS=100",
+		"UPPR_RATE_LIMIT_WINDOW=1m",
 		"",
 	}, "\n"))
 }
@@ -97,6 +104,20 @@ func ensureEnvDefaults(path string) error {
 	} else if normalizeListenAddr(values["ADDR"]) == legacyDefaultAddr {
 		defaults["ADDR"] = defaultAddr
 		ordered = append(ordered, "ADDR")
+	}
+	for _, entry := range []struct{ key, value string }{
+		{"UPPR_DOMAINS", "uppr.localhost"},
+		{"UPPR_DOCKER_IMAGE", "uppr:local"},
+		{"UPPR_DOCKER_NETWORK", "uppr-network"},
+		{"UPPR_RATE_LIMIT_ENABLED", "true"},
+		{"UPPR_RATE_LIMIT_ZONE", "uppr"},
+		{"UPPR_RATE_LIMIT_EVENTS", "100"},
+		{"UPPR_RATE_LIMIT_WINDOW", "1m"},
+	} {
+		if _, ok := values[entry.key]; !ok {
+			defaults[entry.key] = entry.value
+			ordered = append(ordered, entry.key)
+		}
 	}
 	if len(ordered) == 0 {
 		return nil
@@ -418,9 +439,9 @@ button { min-height:40px; border:1px solid var(--accent); border-radius:8px; bac
 </head>
 <body>
 <main>
-  <div class="brand"><div class="brand-mark">U</div><div><div class="brand-name">Uppr</div><p class="subtitle">Infrastructure workspace</p></div></div>
+  <div class="brand"><div class="brand-mark">U</div><div class="brand-name">Uppr</div></div>
   <form method="post" action="/login">
-    <h1>Admin login</h1>
+    <h1>Log in</h1>
     {{if .Error}}<p class="error">{{.Error}}</p>{{end}}
     <label>Username <input name="username" autocomplete="username" required autofocus></label>
     <label>Password <input name="password" type="password" autocomplete="current-password" required></label>

@@ -214,8 +214,25 @@ type syncPage struct {
 	BasePath   string
 	ActiveRepo string
 	Repos      []Repo
+	Items      []syncItem
 	Message    string
 	Error      string
+}
+
+type syncItem struct {
+	Workspace string
+	Root      string
+	BasePath  string
+	Index     int
+	Repo      Repo
+}
+
+type launchPage struct {
+	Root, BasePath, ActiveRepo, Message, Error string
+}
+
+type terminalPage struct {
+	Root, BasePath, ActiveRepo, Message, Error string
 }
 
 type credentialsPage struct {
@@ -252,8 +269,9 @@ func (app *webApp) routes() http.Handler {
 	mux.HandleFunc("/workspaces", app.handleWorkspaces)
 	mux.HandleFunc("/workspaces/", app.handleWorkspaceRoute)
 	mux.HandleFunc("/files", app.handleFiles)
-	mux.HandleFunc("/files/shell", app.handleFilesShell)
 	mux.HandleFunc("/files/", app.handleFile)
+	mux.HandleFunc("/terminal", app.handleTerminal)
+	mux.HandleFunc("/terminal/shell", app.handleTerminalShell)
 	mux.HandleFunc("/repos", app.handleAddRepo)
 	mux.HandleFunc("/repos/", app.handleRepo)
 	mux.HandleFunc("/generate", app.handleGenerate)
@@ -261,6 +279,9 @@ func (app *webApp) routes() http.Handler {
 	mux.HandleFunc("/sync", app.handleSync)
 	mux.HandleFunc("/sync/pull", app.handleSyncPull)
 	mux.HandleFunc("/sync/push", app.handleSyncPush)
+	mux.HandleFunc("/sync/prepare", app.handleSyncPrepare)
+	mux.HandleFunc("/launch", app.handleLaunch)
+	mux.HandleFunc("/launch/shell", app.handleLaunchShell)
 	mux.HandleFunc("/credentials", app.handleCredentials)
 	return securityHeaders(app.requireAuth(mux))
 }
@@ -379,8 +400,9 @@ func (app *webApp) workspaceRoutes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", app.handleWorkspaceIndex)
 	mux.HandleFunc("/files", app.handleFiles)
-	mux.HandleFunc("/files/shell", app.handleFilesShell)
 	mux.HandleFunc("/files/", app.handleFile)
+	mux.HandleFunc("/terminal", app.handleTerminal)
+	mux.HandleFunc("/terminal/shell", app.handleTerminalShell)
 	mux.HandleFunc("/repos", app.handleAddRepo)
 	mux.HandleFunc("/repos/", app.handleRepo)
 	mux.HandleFunc("/generate", app.handleGenerate)
@@ -388,6 +410,9 @@ func (app *webApp) workspaceRoutes() http.Handler {
 	mux.HandleFunc("/sync", app.handleSync)
 	mux.HandleFunc("/sync/pull", app.handleSyncPull)
 	mux.HandleFunc("/sync/push", app.handleSyncPush)
+	mux.HandleFunc("/sync/prepare", app.handleSyncPrepare)
+	mux.HandleFunc("/launch", app.handleLaunch)
+	mux.HandleFunc("/launch/shell", app.handleLaunchShell)
 	mux.HandleFunc("/credentials", app.handleCredentials)
 	return mux
 }
@@ -414,6 +439,10 @@ func (app *webApp) renderRepos(w http.ResponseWriter, page indexPage) {
 }
 
 func (app *webApp) handleAddRepo(w http.ResponseWriter, r *http.Request) {
+	if app.isServerMode() && app.basePath == "" {
+		http.Redirect(w, r, "/workspaces?message=create+or+open+a+workspace+to+manage+repositories", http.StatusSeeOther)
+		return
+	}
 	if r.Method == http.MethodGet {
 		app.renderRepos(w, indexPage{Message: r.URL.Query().Get("message")})
 		return
@@ -691,7 +720,22 @@ func (app *webApp) renderFiles(w http.ResponseWriter, page fileListPage) {
 	}
 }
 
-func (app *webApp) handleFilesShell(w http.ResponseWriter, r *http.Request) {
+func (app *webApp) handleTerminal(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/terminal" {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	page := terminalPage{Root: app.root, BasePath: app.basePath, Message: r.URL.Query().Get("message")}
+	if err := terminalTemplate.Execute(w, page); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+func (app *webApp) handleTerminalShell(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -747,10 +791,32 @@ func (app *webApp) handleSync(w http.ResponseWriter, r *http.Request) {
 }
 
 func (app *webApp) renderSync(w http.ResponseWriter, page syncPage) {
-	repos, err := readRepos(filepath.Join(app.root, reposFile))
+	var repos []Repo
+	var err error
+	if !(app.isServerMode() && app.basePath == "") {
+		repos, err = readRepos(filepath.Join(app.root, reposFile))
+	}
 	page.Root = app.root
 	page.BasePath = app.basePath
 	page.Repos = repos
+	for index, repo := range repos {
+		page.Items = append(page.Items, syncItem{Root: app.root, BasePath: app.basePath, Index: index, Repo: repo})
+	}
+	if app.isServerMode() && app.basePath == "" {
+		page.Repos = nil
+		page.Items = nil
+		workspaces, workspaceErr := readWorkspaces(filepath.Join(app.root, workspacesFile))
+		if workspaceErr != nil && page.Error == "" { page.Error = workspaceErr.Error() }
+		for _, workspace := range workspaces {
+			_, root, resolveErr := resolveWorkspace(app.root, workspace.Name)
+			if resolveErr != nil { if page.Error == "" { page.Error = resolveErr.Error() }; continue }
+			workspaceRepos, readErr := readRepos(filepath.Join(root, reposFile))
+			if readErr != nil { if page.Error == "" { page.Error = readErr.Error() }; continue }
+			for index, repo := range workspaceRepos {
+				page.Items = append(page.Items, syncItem{Workspace: workspace.Name, Root: root, BasePath: "/workspaces/" + url.PathEscape(workspace.Name), Index: index, Repo: repo})
+			}
+		}
+	}
 	if err != nil && page.Error == "" {
 		page.Error = err.Error()
 	}
@@ -759,12 +825,81 @@ func (app *webApp) renderSync(w http.ResponseWriter, page syncPage) {
 	}
 }
 
+func (app *webApp) handleSyncPrepare(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Redirect(w, r, app.routePath("/sync"), http.StatusSeeOther)
+		return
+	}
+	var roots []string
+	if app.isServerMode() && app.basePath == "" {
+		workspaces, err := readWorkspaces(filepath.Join(app.root, workspacesFile))
+		if err != nil {
+			app.renderSync(w, syncPage{Error: err.Error()})
+			return
+		}
+		for _, workspace := range workspaces {
+			_, root, err := resolveWorkspace(app.root, workspace.Name)
+			if err != nil {
+				app.renderSync(w, syncPage{Error: err.Error()})
+				return
+			}
+			roots = append(roots, root)
+		}
+	} else {
+		roots = []string{app.root}
+	}
+	for _, root := range roots {
+		repos, err := readRepos(filepath.Join(root, reposFile))
+		if err != nil {
+			app.renderSync(w, syncPage{Error: err.Error()})
+			return
+		}
+		resolveRepoPaths(root, repos)
+		for _, repo := range repos {
+			if err := prepareRepoEnv(repo); err != nil {
+				app.renderSync(w, syncPage{Error: err.Error()})
+				return
+			}
+		}
+	}
+	http.Redirect(w, r, app.routePath("/sync?message=application+files+prepared"), http.StatusSeeOther)
+}
+
+func (app *webApp) handleLaunch(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	page := launchPage{Root: app.root, BasePath: app.basePath, Message: r.URL.Query().Get("message")}
+	if err := launchTemplate.Execute(w, page); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+func (app *webApp) handleLaunchShell(w http.ResponseWriter, r *http.Request) { app.handleShell(w, r, app.root) }
+
 func (app *webApp) handleSyncPull(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Redirect(w, r, app.routePath("/sync"), http.StatusSeeOther)
 		return
 	}
-	if err := pullReposAt(app.root); err != nil {
+	if app.isServerMode() && app.basePath == "" {
+		workspaces, err := readWorkspaces(filepath.Join(app.root, workspacesFile))
+		if err != nil {
+			app.renderSync(w, syncPage{Error: err.Error()})
+			return
+		}
+		for _, workspace := range workspaces {
+			_, root, err := resolveWorkspace(app.root, workspace.Name)
+			if err == nil {
+				err = pullReposAt(root)
+			}
+			if err != nil {
+				app.renderSync(w, syncPage{Error: workspace.Name + ": " + err.Error()})
+				return
+			}
+		}
+	} else if err := pullReposAt(app.root); err != nil {
 		app.renderSync(w, syncPage{Error: err.Error()})
 		return
 	}
@@ -781,7 +916,23 @@ func (app *webApp) handleSyncPush(w http.ResponseWriter, r *http.Request) {
 		app.renderSync(w, syncPage{Error: "commit message cannot be empty"})
 		return
 	}
-	if err := pushReposAt(app.root, message); err != nil {
+	if app.isServerMode() && app.basePath == "" {
+		workspaces, err := readWorkspaces(filepath.Join(app.root, workspacesFile))
+		if err != nil {
+			app.renderSync(w, syncPage{Error: err.Error()})
+			return
+		}
+		for _, workspace := range workspaces {
+			_, root, err := resolveWorkspace(app.root, workspace.Name)
+			if err == nil {
+				err = pushReposAt(root, message)
+			}
+			if err != nil {
+				app.renderSync(w, syncPage{Error: workspace.Name + ": " + err.Error()})
+				return
+			}
+		}
+	} else if err := pushReposAt(app.root, message); err != nil {
 		app.renderSync(w, syncPage{Error: err.Error()})
 		return
 	}
@@ -1666,10 +1817,12 @@ func githubRepoFromURL(raw string) string {
 
 var workspacesTemplate = template.Must(template.New("workspaces").Funcs(webFuncs).Parse(pageChrome(workspacesBody)))
 var indexTemplate = template.Must(template.New("index").Funcs(webFuncs).Parse(pageChrome(indexBody)))
-var filesTemplate = template.Must(template.New("files").Funcs(webFuncs).Parse(pageChrome(filesBody + terminalAssets)))
+var filesTemplate = template.Must(template.New("files").Funcs(webFuncs).Parse(pageChrome(filesBody)))
 var repoTemplate = template.Must(template.New("repo").Funcs(webFuncs).Parse(pageChrome(repoBody + terminalAssets)))
 var fileTemplate = template.Must(template.New("file").Funcs(webFuncs).Parse(pageChrome(fileBody)))
 var syncTemplate = template.Must(template.New("sync").Funcs(webFuncs).Parse(pageChrome(syncBody)))
+var terminalTemplate = template.Must(template.New("terminal").Funcs(webFuncs).Parse(pageChrome(terminalBody + terminalAssets)))
+var launchTemplate = template.Must(template.New("launch").Funcs(webFuncs).Parse(pageChrome(launchBody + terminalAssets)))
 var credentialsTemplate = template.Must(template.New("credentials").Funcs(webFuncs).Parse(pageChrome(credentialsBody)))
 
 func pageChrome(body string) string {
@@ -1836,15 +1989,32 @@ textarea { min-height:124px; resize:vertical; white-space:pre-wrap; }
 .help { margin-top:5px; font-size:12px; line-height:1.35; }
 .field + .field, .field-grid + .field, .field + .field-grid, .field-grid + .field-grid { margin-top:14px; }
 .inline-actions, .form-actions { display:flex; align-items:center; gap:8px; }
-.repo-table { width:100%; border-collapse:separate; border-spacing:0; overflow:hidden; border:1px solid var(--border); border-radius:var(--radius-md); background:var(--surface); }
+.repo-table { width:100%; max-width:100%; table-layout:fixed; border-collapse:separate; border-spacing:0; overflow:hidden; border:1px solid var(--border); border-radius:var(--radius-md); background:var(--surface); }
 .repo-table th { height:38px; padding:0 14px; text-align:left; color:var(--text-soft); font-size:12px; font-weight:700; border-bottom:1px solid var(--border); background:var(--surface-muted); }
-.repo-table td { height:62px; padding:10px 14px; border-bottom:1px solid var(--border); vertical-align:middle; }
+.repo-table td { height:72px; padding:12px 14px; border-bottom:1px solid var(--border); vertical-align:middle; min-width:0; overflow-wrap:anywhere; }
+.repo-table td:last-child, .repo-table th:last-child { width:190px; }
 .repo-table tr:last-child td { border-bottom:0; }
 .repo-table tbody tr:hover { background:var(--surface-muted); }
-.repo-row__main { min-width:0; color:var(--text); text-decoration:none; }
+.repo-row__main { min-width:0; display:grid; gap:4px; color:var(--text); text-decoration:none; }
 .repo-row__main:hover .repo-name { color:var(--accent); }
-.repo-name { font-weight:750; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.repo-meta { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.repo-name { display:block; font-weight:750; line-height:1.25; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.repo-meta { display:block; font-size:12px; line-height:1.35; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.repo-card-grid { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:14px; }
+.repo-card { position:relative; min-width:0; min-height:220px; display:flex; flex-direction:column; gap:18px; padding:18px; border:1px solid var(--border); border-radius:var(--radius-md); background:var(--surface); box-shadow:var(--shadow); transition:border-color .15s ease, transform .15s ease; }
+.repo-card:hover, .repo-card:focus-within { z-index:2; border-color:var(--border-strong); transform:translateY(-1px); }
+.repo-card__header { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; min-width:0; }
+.repo-card__header .repo-row__main { flex:1 1 auto; }
+.repo-card .repo-name { font-size:16px; white-space:normal; overflow-wrap:anywhere; }
+.repo-card .repo-meta { white-space:normal; overflow-wrap:anywhere; }
+.repo-card__details { display:grid; grid-template-columns:minmax(0, 1.4fr) minmax(110px, .8fr) minmax(110px, .8fr); gap:14px; }
+.repo-card__detail { min-width:0; }
+.repo-card__detail .eyebrow { margin-bottom:6px; }
+.repo-card__actions { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-top:auto; padding-top:14px; border-top:1px solid var(--border); }
+.repo-card__actions > .muted { font-size:12px; }
+.repo-card__menu { position:relative; }
+.repo-card__menu summary { list-style:none; }
+.repo-card__menu summary::-webkit-details-marker { display:none; }
+.repo-card__menu-panel { position:absolute; right:0; top:calc(100% + 6px); z-index:5; min-width:190px; display:grid; gap:6px; margin:0; padding:8px; }
 .branch-badge, .badge { border:1px solid var(--border); background:var(--surface-muted); color:var(--text-muted); border-radius:999px; padding:3px 8px; font-size:12px; font-family:"SFMono-Regular", Consolas, "Liberation Mono", monospace; display:inline-flex; align-items:center; gap:5px; }
 .badge--generated { color:var(--accent); background:var(--accent-soft); border-color:rgba(91,156,255,.28); }
 .status { display:inline-flex; align-items:center; gap:8px; font-weight:650; }
@@ -1903,11 +2073,18 @@ body.drawer-open .drawer { transform:translateX(0); }
   .panel { padding:14px; }
   .grid-2, .grid-3 { grid-template-columns:1fr; }
   .repo-table { display:block; overflow:auto; }
+  .repo-card-grid { grid-template-columns:1fr; }
   .file-browser { grid-template-columns:1fr; }
   .file-sidebar { border-right:0; border-bottom:1px solid var(--border); padding-right:0; padding-bottom:14px; }
   .terminal { height:460px; min-height:360px; }
   .terminal--compact { height:280px; min-height:240px; }
   .env-row { grid-template-columns:1fr; gap:6px; }
+}
+@media (max-width: 560px) {
+  .repo-card__header, .repo-card__actions { align-items:stretch; flex-direction:column; }
+  .repo-card__details { grid-template-columns:1fr; }
+  .repo-card__actions .inline-actions { display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); }
+  .repo-card__menu-panel { right:auto; left:0; }
 }
 </style>
 </head>
@@ -1932,8 +2109,11 @@ body.drawer-open .drawer { transform:translateX(0); }
     <a href="/workspaces" data-nav-link data-mobile-close><span class="nav-icon">##</span>Workspaces</a>
     <a href="{{.BasePath}}/repos" data-nav-link data-mobile-close><span class="nav-icon">[]</span>Repositories</a>
     <a href="{{.BasePath}}/credentials" data-nav-link data-mobile-close><span class="nav-icon">--</span>Credentials</a>
-    <a href="{{.BasePath}}/files" data-nav-link data-mobile-close><span class="nav-icon">{}</span>Files</a>
+    {{if .BasePath}}<a href="/files" data-nav-link data-mobile-close><span class="nav-icon">{}</span>Top-level files</a>{{end}}
+    <a href="{{.BasePath}}/files" data-nav-link data-mobile-close><span class="nav-icon">{}</span>{{if .BasePath}}Workspace files{{else}}Files{{end}}</a>
+    <a href="{{.BasePath}}/terminal" data-nav-link data-mobile-close><span class="nav-icon">$_</span>Terminal</a>
     <a href="{{.BasePath}}/sync" data-nav-link data-mobile-close><span class="nav-icon">&lt;&gt;</span>Sync</a>
+    <a href="{{.BasePath}}/launch" data-nav-link data-mobile-close><span class="nav-icon">&gt;</span>Launch</a>
   </nav>
 </div>
 <div class="app-layout">
@@ -1952,8 +2132,11 @@ body.drawer-open .drawer { transform:translateX(0); }
       <a href="/workspaces" data-nav-link><span class="nav-icon">##</span>Workspaces</a>
       <a href="{{.BasePath}}/repos" data-nav-link><span class="nav-icon">[]</span>Repositories</a>
       <a href="{{.BasePath}}/credentials" data-nav-link><span class="nav-icon">--</span>Credentials</a>
-      <a href="{{.BasePath}}/files" data-nav-link><span class="nav-icon">{}</span>Files</a>
+      {{if .BasePath}}<a href="/files" data-nav-link><span class="nav-icon">{}</span>Top-level files</a>{{end}}
+      <a href="{{.BasePath}}/files" data-nav-link><span class="nav-icon">{}</span>{{if .BasePath}}Workspace files{{else}}Files{{end}}</a>
+      <a href="{{.BasePath}}/terminal" data-nav-link><span class="nav-icon">$_</span>Terminal</a>
       <a href="{{.BasePath}}/sync" data-nav-link><span class="nav-icon">&lt;&gt;</span>Sync</a>
+      <a href="{{.BasePath}}/launch" data-nav-link><span class="nav-icon">&gt;</span>Launch</a>
     </nav>
     <div class="sidebar-footer">
       <button class="button theme-toggle" type="button" data-theme-toggle aria-pressed="false">Dark Mode</button>
@@ -2147,11 +2330,11 @@ body.drawer-open .drawer { transform:translateX(0); }
       if (show) { visible++; }
     });
     if (repoSort) {
-      var tbody = document.querySelector('[data-repo-table-body]');
+      var list = document.querySelector('[data-repo-list]');
       rows.sort(function (a, b) {
         var key = repoSort.value === 'sync' ? 'sync' : 'name';
         return (a.getAttribute('data-' + key) || '').localeCompare(b.getAttribute('data-' + key) || '');
-      }).forEach(function (row) { if (tbody) { tbody.appendChild(row); } });
+      }).forEach(function (row) { if (list) { list.appendChild(row); } });
     }
     if (repoCount) {
       repoCount.textContent = visible + (visible === 1 ? ' repository' : ' repositories');
@@ -2226,7 +2409,6 @@ const workspacesBody = `
     <thead>
       <tr>
         <th>Workspace</th>
-        <th>Local path</th>
         <th>Actions</th>
       </tr>
     </thead>
@@ -2234,7 +2416,6 @@ const workspacesBody = `
     {{range .Workspaces}}
       <tr>
         <td><a class="repo-row__main" href="/workspaces/{{.Name}}/repos"><span class="repo-name">{{.Name}}</span><span class="repo-meta mono">{{.Path}}</span></a></td>
-        <td><code class="mono repo-meta">{{.Path}}</code></td>
         <td>
           <div class="inline-actions">
             <a class="button button--small" href="/workspaces/{{.Name}}/repos">Open</a>
@@ -2300,40 +2481,41 @@ const indexBody = `
     </div>
   </div>
   {{if .Repos}}
-  <table class="repo-table">
-    <thead>
-      <tr>
-        <th>Repository</th>
-        <th>Local path</th>
-        <th>Branch</th>
-        <th>Status</th>
-        <th>Last sync</th>
-        <th>Actions</th>
-      </tr>
-    </thead>
-    <tbody data-repo-table-body>
+  <div class="repo-card-grid" data-repo-list>
     {{range $index, $repo := .Repos}}
     {{$status := repoStatus $.Root $repo}}
-    <tr data-repo-row data-name="{{if .Name}}{{.Name}}{{else}}{{.URL}}{{end}}" data-status="{{$status.Key}}" data-sync="{{repoLastSync $.Root .}}">
-      <td>
+    <article class="repo-card" data-repo-row data-name="{{if .Name}}{{.Name}}{{else}}{{.URL}}{{end}}" data-status="{{$status.Key}}" data-sync="{{repoLastSync $.Root .}}">
+      <div class="repo-card__header">
         <a class="repo-row__main" href="{{$.BasePath}}/repos/{{$index}}">
           <span class="repo-name">{{if .Name}}{{.Name}}{{else}}{{.URL}}{{end}}</span>
           <span class="repo-meta mono">{{.URL}}</span>
         </a>
-      </td>
-      <td><code class="mono repo-meta">{{if .Path}}{{.Path}}{{else}}{{.URL}}{{end}}</code></td>
-      <td><span class="branch-badge">branch {{branchLabel .Branch}}</span></td>
-      <td><span class="status status--{{$status.Key}}"><span class="status-dot"></span>{{$status.Label}}</span></td>
-      <td class="muted">{{repoLastSync $.Root .}}</td>
-      <td>
+        <span class="status status--{{$status.Key}}"><span class="status-dot"></span>{{$status.Label}}</span>
+      </div>
+      <div class="repo-card__details">
+        <div class="repo-card__detail">
+          <span class="eyebrow">Local path</span>
+          <code class="mono repo-meta">{{if .Path}}{{.Path}}{{else}}{{.URL}}{{end}}</code>
+        </div>
+        <div class="repo-card__detail">
+          <span class="eyebrow">Branch</span>
+          <span class="branch-badge">{{branchLabel .Branch}}</span>
+        </div>
+        <div class="repo-card__detail">
+          <span class="eyebrow">Last sync</span>
+          <span class="muted">{{repoLastSync $.Root .}}</span>
+        </div>
+      </div>
+      <div class="repo-card__actions">
+        <span class="muted">Repository actions</span>
         <div class="inline-actions">
           <form method="post" action="{{$.BasePath}}/repos/{{$index}}/pull" data-loading-label="Pulling...">
             <button class="button button--small" type="submit">Pull</button>
           </form>
           <a class="button button--small" href="{{$.BasePath}}/repos/{{$index}}">Open</a>
-          <details>
-            <summary class="button button--small">...</summary>
-            <div class="panel" style="position:absolute; margin-top:6px; padding:8px; min-width:170px; z-index:5;">
+          <details class="repo-card__menu">
+            <summary class="button button--small" aria-label="More repository actions">More</summary>
+            <div class="panel repo-card__menu-panel">
               <a class="button button--small" href="{{$.BasePath}}/repos/{{$index}}">Edit configuration</a>
               <button class="button button--small" type="button" data-copy="{{absPath $.Root .Path}}" data-label="Copy path">Copy path</button>
               <a class="button button--small" href="{{.URL}}" target="_blank" rel="noreferrer">Open on GitHub</a>
@@ -2343,11 +2525,10 @@ const indexBody = `
             </div>
           </details>
         </div>
-      </td>
-    </tr>
+      </div>
+    </article>
     {{end}}
-    </tbody>
-  </table>
+  </div>
   {{else}}
   <div class="empty-state">
     <h3>No repositories configured</h3>
@@ -2455,23 +2636,6 @@ const filesBody = `
         {{end}}
       </div>
     </div>
-  </div>
-</section>
-
-<section class="panel" aria-labelledby="project-shell-heading">
-  <div class="section-heading">
-    <div>
-      <span class="eyebrow">Browser shell</span>
-      <h2 id="project-shell-heading">Project Terminal</h2>
-      <p class="mono">{{.Root}}</p>
-    </div>
-  </div>
-  <div class="terminal terminal--compact" data-shell data-shell-url="{{.BasePath}}/files/shell" data-shell-root="{{.Root}}">
-    <div class="terminal-toolbar">
-      <code class="mono">{{.Root}}</code>
-      <span class="terminal-status" data-terminal-status aria-live="polite">Connecting...</span>
-    </div>
-    <div class="terminal-viewport" data-terminal-viewport></div>
   </div>
 </section>
 `
@@ -2820,6 +2984,12 @@ const terminalAssets = `
     setStatus('Connected');
     fitAndResize();
     term.focus();
+	  document.querySelectorAll('[data-terminal-command]').forEach(function (button) {
+		button.addEventListener('click', function () {
+		  send({type: 'input', data: button.getAttribute('data-terminal-command') + '\n'});
+		  term.focus();
+		});
+	  });
   });
   socket.addEventListener('message', function (event) {
     if (typeof event.data === 'string') {
@@ -2871,6 +3041,11 @@ const syncBody = `
   </div>
 </header>
 
+<section class="panel" aria-labelledby="prepare-heading">
+  <div class="section-heading"><div><h2 id="prepare-heading">Prepare every application</h2><p>Create missing <code>config/.env</code> and <code>data/main.sqlite</code> files. Environment keys are populated from each app's <code>schema.json</code> or <code>env.schema</code>.</p></div></div>
+  <form method="post" action="{{.BasePath}}/sync/prepare" data-loading-label="Preparing..."><button class="button button--primary" type="submit">Prepare application files</button></form>
+</section>
+
 <section class="split-actions" aria-labelledby="sync-heading">
   <div class="panel">
     <div class="section-heading">
@@ -2910,7 +3085,7 @@ const syncBody = `
       <p>These repositories are controlled by Pull all and Push all.</p>
     </div>
   </div>
-  {{if .Repos}}
+  {{if .Items}}
   <table class="repo-table">
     <thead>
       <tr>
@@ -2923,15 +3098,15 @@ const syncBody = `
       </tr>
     </thead>
     <tbody>
-    {{range $index, $repo := .Repos}}
-    {{$status := repoStatus $.Root $repo}}
+    {{range .Items}}
+    {{$status := repoStatus .Root .Repo}}
     <tr>
-      <td><a class="repo-row__main" href="{{$.BasePath}}/repos/{{$index}}"><span class="repo-name">{{if .Name}}{{.Name}}{{else}}{{.URL}}{{end}}</span><span class="repo-meta mono">{{.URL}}</span></a></td>
-      <td><code class="mono repo-meta">{{if .Path}}{{.Path}}{{else}}{{.URL}}{{end}}</code></td>
-      <td><span class="branch-badge">branch {{branchLabel .Branch}}</span></td>
+      <td><a class="repo-row__main" href="{{.BasePath}}/repos/{{.Index}}"><span class="repo-name">{{if .Workspace}}{{.Workspace}} / {{end}}{{if .Repo.Name}}{{.Repo.Name}}{{else}}{{.Repo.URL}}{{end}}</span><span class="repo-meta mono">{{.Repo.URL}}</span></a></td>
+      <td><code class="mono repo-meta">{{if .Repo.Path}}{{.Repo.Path}}{{else}}{{.Repo.URL}}{{end}}</code></td>
+      <td><span class="branch-badge">branch {{branchLabel .Repo.Branch}}</span></td>
       <td><span class="status status--{{$status.Key}}"><span class="status-dot"></span>{{$status.Label}}</span></td>
-      <td class="muted">{{repoLastSync $.Root .}}</td>
-      <td><a class="button button--small" href="{{$.BasePath}}/repos/{{$index}}">Open</a></td>
+      <td class="muted">{{repoLastSync .Root .Repo}}</td>
+      <td><a class="button button--small" href="{{.BasePath}}/repos/{{.Index}}">Open</a></td>
     </tr>
     {{end}}
     </tbody>
@@ -2942,5 +3117,40 @@ const syncBody = `
     <p>Add repositories on the Repos page before running sync controls.</p>
   </div>
   {{end}}
+</section>
+`
+
+const terminalBody = `
+<header class="page-header">
+  <div>
+    <h1>Terminal</h1>
+    <p class="page-description">Run commands from the root of this workspace.</p>
+  </div>
+</header>
+
+<section class="panel" aria-labelledby="workspace-terminal-heading">
+  <div class="section-heading">
+    <div>
+      <span class="eyebrow">Browser shell</span>
+      <h2 id="workspace-terminal-heading">Workspace terminal</h2>
+      <p class="mono">{{.Root}}</p>
+    </div>
+  </div>
+  <div class="terminal" data-shell data-shell-url="{{.BasePath}}/terminal/shell" data-shell-root="{{.Root}}">
+    <div class="terminal-toolbar">
+      <code class="mono">{{.Root}}</code>
+      <span class="terminal-status" data-terminal-status aria-live="polite">Connecting...</span>
+    </div>
+    <div class="terminal-viewport" data-terminal-viewport></div>
+  </div>
+</section>
+`
+
+const launchBody = `
+<header class="page-header"><div><h1>Launch application</h1><p class="page-description">Start the Docker Compose stack and watch its output live.</p></div></header>
+<section class="panel">
+  <div class="section-heading"><div><h2>Launch terminal</h2><p>Generate files first when repository configuration has changed.</p></div><div class="inline-actions"><form method="post" action="{{.BasePath}}/generate" data-loading-label="Generating..."><button class="button" type="submit">Generate files</button></form><button class="button button--primary" type="button" data-terminal-command="docker compose up --build">Launch stack</button></div></div>
+  <div class="notice">Launch runs <code>docker compose up --build</code>. Use Ctrl+C in the terminal to stop it.</div>
+  <div class="terminal" data-shell data-shell-url="{{.BasePath}}/launch/shell" data-shell-root="{{.Root}}"><div class="terminal-toolbar"><code class="mono">{{.Root}}</code><span class="terminal-status" data-terminal-status aria-live="polite">Connecting...</span></div><div class="terminal-viewport" data-terminal-viewport></div></div>
 </section>
 `

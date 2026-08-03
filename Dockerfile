@@ -7,6 +7,8 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 go build -o /usr/local/bin/uppr .
 
+FROM docker:cli AS docker_cli
+
 FROM debian:bookworm-slim
 
 WORKDIR /app
@@ -15,6 +17,8 @@ RUN apt-get update \
 	&& rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /usr/local/bin/uppr /usr/local/bin/uppr
+COPY --from=docker_cli /usr/local/bin/docker /usr/local/bin/docker
+COPY --from=docker_cli /usr/local/libexec/docker/cli-plugins/docker-compose /usr/local/libexec/docker/cli-plugins/docker-compose
 
 ENV PORT=9944
 EXPOSE 9944

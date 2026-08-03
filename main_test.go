@@ -45,6 +45,40 @@ func TestRunServeCommandUsesServe(t *testing.T) {
 	}
 }
 
+func TestRenderSystemdServiceRunsTheGeneratedComposeStack(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "uppr root")
+	unit := renderSystemdService(root, "/usr/bin/docker", "uppr:local", "uppr-network")
+	for _, want := range []string{
+		`WorkingDirectory=` + strings.ReplaceAll(root, " ", `\x20`),
+		`compose --env-file "` + filepath.Join(root, envFile) + `" --project-directory "` + root + `" up --build --remove-orphans`,
+		`compose --env-file "` + filepath.Join(root, envFile) + `" --project-directory "` + root + `" down`,
+	} {
+		if !strings.Contains(unit, want) {
+			t.Fatalf("unit missing %q:\n%s", want, unit)
+		}
+	}
+}
+
+func TestBootstrapServiceRootCreatesEasyEnvironment(t *testing.T) {
+	root := t.TempDir()
+	if err := bootstrapServiceRoot(root); err != nil {
+		t.Fatal(err)
+	}
+	values, err := readDotEnv(filepath.Join(root, envFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if values["UPPR_DOMAINS"] != "uppr.localhost" || values["SESSION_SECRET"] == "" {
+		t.Fatalf("unexpected defaults: %#v", values)
+	}
+	if values[workspacesDirEnv] != filepath.Join(root, "data", workspacesDir) {
+		t.Fatalf("%s = %q", workspacesDirEnv, values[workspacesDirEnv])
+	}
+	if _, err := os.Stat(filepath.Join(root, "data")); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestInitProjectCreatesFilesInTargetDirectory(t *testing.T) {
 	dir := t.TempDir()
 
@@ -508,6 +542,25 @@ func TestPrepareRepoEnvCreatesConfigEnvFromSchema(t *testing.T) {
 	if info, err := os.Stat(filepath.Join(repoPath, "data")); err != nil || !info.IsDir() {
 		t.Fatalf("expected data directory: %v", err)
 	}
+	if _, err := os.Stat(filepath.Join(repoPath, "data", "main.sqlite")); err != nil {
+		t.Fatalf("expected main.sqlite: %v", err)
+	}
+}
+
+func TestPrepareRepoEnvCreatesFilesWithoutSchema(t *testing.T) {
+	repoPath := filepath.Join(t.TempDir(), "apps", "api")
+	if err := os.MkdirAll(repoPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := prepareRepoEnv(Repo{Name: "api", Path: repoPath}); err != nil {
+		t.Fatal(err)
+	}
+	if contents := readTestFile(t, filepath.Join(repoPath, envFile)); contents != "" {
+		t.Fatalf("env = %q, want empty", contents)
+	}
+	if _, err := os.Stat(filepath.Join(repoPath, "data", "main.sqlite")); err != nil {
+		t.Fatalf("expected main.sqlite: %v", err)
+	}
 }
 
 func TestPrepareRepoEnvPreservesExistingValues(t *testing.T) {
@@ -688,6 +741,18 @@ func TestPushRepoCommitsAndPushesChanges(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repoPath, "feature.txt"), []byte("feature\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.MkdirAll(filepath.Join(repoPath, "config"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(repoPath, "data"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repoPath, "config", ".env"), []byte("SECRET=value\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repoPath, "data", "main.sqlite"), []byte("private data\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	repo := Repo{Name: "repo", Path: repoPath}
 	if err := pushRepo(repo, "common message", ""); err != nil {
@@ -697,6 +762,56 @@ func TestPushRepoCommitsAndPushesChanges(t *testing.T) {
 	got := runTestGitOutput(t, remote, "log", "--format=%s", "-1")
 	if got != "common message" {
 		t.Fatalf("remote subject = %q, want %q", got, "common message")
+	}
+	ignore := readTestFile(t, filepath.Join(repoPath, ".gitignore"))
+	if !strings.HasSuffix(ignore, protectedGitignoreBlock) {
+		t.Fatalf(".gitignore = %q, want protected block at end", ignore)
+	}
+	if tree := runTestGitOutput(t, remote, "ls-tree", "-r", "--name-only", "main"); strings.Contains(tree, "config/") || strings.Contains(tree, "data/") {
+		t.Fatalf("remote contains protected files:\n%s", tree)
+	}
+}
+
+func TestEnsureRepoGitignorePreservesExistingRulesAndProtectsRootDirectories(t *testing.T) {
+	repoPath := t.TempDir()
+	path := filepath.Join(repoPath, ".gitignore")
+	if err := os.WriteFile(path, []byte("*.log\n!/data/keep.db\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ensureRepoGitignore(repoPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureRepoGitignore(repoPath); err != nil {
+		t.Fatal(err)
+	}
+
+	got := readTestFile(t, path)
+	want := "*.log\n!/data/keep.db\n" + protectedGitignoreBlock
+	if got != want {
+		t.Fatalf(".gitignore = %q, want %q", got, want)
+	}
+}
+
+func TestPushRepoRefusesTrackedProtectedFiles(t *testing.T) {
+	repoPath := t.TempDir()
+	runTestGit(t, repoPath, "init", "-b", "main")
+	configureTestGitUser(t, repoPath)
+	if err := os.MkdirAll(filepath.Join(repoPath, "config"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repoPath, "config", "secret.env"), []byte("SECRET=value\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runTestGit(t, repoPath, "add", "-f", "config/secret.env")
+	runTestGit(t, repoPath, "commit", "-m", "tracked secret")
+
+	err := pushRepo(Repo{Name: "repo", Path: repoPath}, "unsafe", "")
+	if err == nil || !strings.Contains(err.Error(), "protected files are tracked") {
+		t.Fatalf("error = %v, want tracked protected files error", err)
+	}
+	if !strings.Contains(err.Error(), "config/secret.env") {
+		t.Fatalf("error = %v, want tracked path", err)
 	}
 }
 
@@ -876,11 +991,29 @@ func TestWebFilesPageLinksProjectFiles(t *testing.T) {
 		`href="/files/docker-compose"`,
 		`href="/files/caddy-dockerfile"`,
 		`href="/files/caddyfile"`,
-		`data-shell-url="/files/shell"`,
-		`Project Terminal`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("index missing %q:\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, `data-shell`) || strings.Contains(body, `Project Terminal`) {
+		t.Fatalf("files page should not render a terminal:\n%s", body)
+	}
+}
+
+func TestWebTerminalPageHasWorkspaceShell(t *testing.T) {
+	root := newTestProject(t)
+	app := &webApp{root: root}
+
+	response := getWeb(t, app, "/terminal")
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
+	}
+	body := response.Body.String()
+	for _, want := range []string{`<h1>Terminal</h1>`, `data-shell-url="/terminal/shell"`, `Workspace terminal`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("terminal page missing %q:\n%s", want, body)
 		}
 	}
 }
@@ -901,6 +1034,9 @@ func TestWebReposPageShowsRepoActions(t *testing.T) {
 	for _, want := range []string{
 		`action="/repos/0/pull"`,
 		`href="/repos/0"`,
+		`class="repo-card-grid"`,
+		`class="repo-card"`,
+		`data-repo-list`,
 		`api`,
 	} {
 		if !strings.Contains(body, want) {
@@ -1173,6 +1309,9 @@ func TestWebSyncPageHasBulkControls(t *testing.T) {
 			t.Fatalf("sync page missing %q:\n%s", want, body)
 		}
 	}
+	if strings.Contains(body, `data-shell`) || strings.Contains(body, `Sync terminal`) {
+		t.Fatalf("sync page should not render a terminal:\n%s", body)
+	}
 }
 
 func TestWebFileShowsWhitelistedProjectFile(t *testing.T) {
@@ -1328,7 +1467,14 @@ func TestGenerateServerFilesBuildsSingleRootCompose(t *testing.T) {
 	masterCompose := readTestFile(t, filepath.Join(root, dockerComposeFile))
 	for _, want := range []string{
 		"services:",
+		"  uppr:",
+		"    image: ${UPPR_DOCKER_IMAGE:-uppr:local}",
+		`    command: ["uppr", "serve", "--addr", "0.0.0.0:9944"`,
+		strconv.Quote(filepath.ToSlash(workspace.Path) + ":" + filepath.ToSlash(workspace.Path)),
+		"      - /var/run/docker.sock:/var/run/docker.sock",
 		"  caddy:",
+		"    depends_on:",
+		"      - uppr",
 		"  ops-api:",
 		strconv.Quote(filepath.ToSlash(filepath.Join(workspace.Path, "apps", "api"))),
 	} {
@@ -1340,7 +1486,11 @@ func TestGenerateServerFilesBuildsSingleRootCompose(t *testing.T) {
 		t.Fatalf("unexpected master compose:\n%s", masterCompose)
 	}
 	masterCaddy := readTestFile(t, filepath.Join(root, caddyFile))
-	if !strings.Contains(masterCaddy, "api.localhost {") || !strings.Contains(masterCaddy, "reverse_proxy ops-api:3000") {
+	if !strings.Contains(masterCaddy, "uppr.localhost {") ||
+		!strings.Contains(masterCaddy, "zone uppr {") ||
+		!strings.Contains(masterCaddy, "reverse_proxy uppr:9944") ||
+		!strings.Contains(masterCaddy, "api.localhost {") ||
+		!strings.Contains(masterCaddy, "reverse_proxy ops-api:3000") {
 		t.Fatalf("unexpected master Caddyfile:\n%s", masterCaddy)
 	}
 	if _, err := os.Stat(filepath.Join(workspaceRoot, dockerComposeFile)); !errors.Is(err, os.ErrNotExist) {

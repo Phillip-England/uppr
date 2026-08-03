@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -105,6 +106,10 @@ func runWithServe(args []string, serve func([]string) error) error {
 		return generateServerFilesAt(absRoot)
 	case "launch":
 		return launchServer(args[1:])
+	case "service":
+		return printService(args[1:])
+	case "service-run":
+		return runService(args[1:], serve)
 	case "web", "ui":
 		return serveWeb(args[1:])
 	case "serve":
@@ -134,6 +139,7 @@ Usage:
   uppr generate                   write Caddyfile, docker-compose.yml, and Makefile
   uppr generate-server [path]     write master Caddy/Docker/Make files
   uppr launch [path]              generate and launch the server Docker Compose stack
+  uppr service [path]             print a systemd unit for a Dockerized Uppr server
   uppr web [path]                 open a browser UI for an uppr project
   uppr serve [path]               serve authenticated web UI for deployment
   uppr <path>                     shorthand for uppr web <path>
@@ -893,15 +899,25 @@ func prepareRepoEnv(repo Repo) error {
 	if err != nil {
 		return err
 	}
-	if len(vars) == 0 {
-		return nil
-	}
-
 	if err := os.MkdirAll(filepath.Join(repo.Path, "config"), 0o755); err != nil {
 		return err
 	}
 	if err := os.MkdirAll(filepath.Join(repo.Path, "data"), 0o755); err != nil {
 		return err
+	}
+	dbPath := filepath.Join(repo.Path, "data", "main.sqlite")
+	if !fileExists(dbPath) {
+		db, openErr := sql.Open("sqlite", dbPath)
+		if openErr != nil {
+			return openErr
+		}
+		if pingErr := db.Ping(); pingErr != nil {
+			_ = db.Close()
+			return pingErr
+		}
+		if closeErr := db.Close(); closeErr != nil {
+			return closeErr
+		}
 	}
 
 	envPath := filepath.Join(repo.Path, envFile)
@@ -931,7 +947,7 @@ func prepareRepoEnv(repo Repo) error {
 	if err := os.WriteFile(envPath, []byte(body.String()), 0o600); err != nil {
 		return err
 	}
-	fmt.Printf("[%s] prepared %s from app environment schema\n", repoLabel(repo), filepath.Join(repo.Path, envFile))
+	fmt.Printf("[%s] prepared config/.env and data/main.sqlite\n", repoLabel(repo))
 	return nil
 }
 
@@ -1173,6 +1189,16 @@ func pushRepo(repo Repo, message, askPass string) error {
 		}
 		return err
 	}
+	if err := ensureRepoGitignore(repo.Path); err != nil {
+		return fmt.Errorf("protect config and data: %w", err)
+	}
+	tracked, err := trackedProtectedPaths(repo.Path)
+	if err != nil {
+		return fmt.Errorf("check protected paths: %w", err)
+	}
+	if len(tracked) > 0 {
+		return fmt.Errorf("refusing to push because protected files are tracked by git: %s; run `git -C %q rm -r --cached --ignore-unmatch config data`, review the changes, and push again", strings.Join(tracked, ", "), repo.Path)
+	}
 
 	fmt.Printf("[%s] git add -A\n", label)
 	if err := runGit(askPass, "-C", repo.Path, "add", "-A"); err != nil {
@@ -1194,6 +1220,40 @@ func pushRepo(repo Repo, message, askPass string) error {
 
 	fmt.Printf("[%s] git push\n", label)
 	return runGit(askPass, "-C", repo.Path, "push")
+}
+
+const protectedGitignoreBlock = "# uppr: never commit local configuration or application data\n/config/\n/data/\n"
+
+func ensureRepoGitignore(repoPath string) error {
+	path := filepath.Join(repoPath, ".gitignore")
+	contents, err := os.ReadFile(path)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if bytes.HasSuffix(contents, []byte(protectedGitignoreBlock)) {
+		return nil
+	}
+
+	var updated bytes.Buffer
+	updated.Write(contents)
+	if len(contents) > 0 && contents[len(contents)-1] != '\n' {
+		updated.WriteByte('\n')
+	}
+	updated.WriteString(protectedGitignoreBlock)
+	return os.WriteFile(path, updated.Bytes(), 0o644)
+}
+
+func trackedProtectedPaths(repoPath string) ([]string, error) {
+	cmd := exec.Command("git", "-C", repoPath, "ls-files", "--", "config", "data")
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	if len(lines) == 1 && lines[0] == "" {
+		return nil, nil
+	}
+	return lines, nil
 }
 
 func hasStagedChanges(path, askPass string) (bool, error) {

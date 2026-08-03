@@ -19,6 +19,13 @@ ADMIN_USERNAME=your-admin-username
 ADMIN_PASSWORD=use-a-strong-password
 SESSION_SECRET=use-a-long-random-secret
 ADDR=:9944
+UPPR_DOMAINS=uppr.example.com,www.uppr.example.com
+UPPR_DOCKER_IMAGE=uppr:local
+UPPR_DOCKER_NETWORK=uppr-network
+UPPR_RATE_LIMIT_ENABLED=true
+UPPR_RATE_LIMIT_ZONE=uppr
+UPPR_RATE_LIMIT_EVENTS=100
+UPPR_RATE_LIMIT_WINDOW=1m
 ```
 
 You can also set these from the web UI by opening `./uppr web .` and using the
@@ -84,6 +91,43 @@ The included `Dockerfile` exposes port `9944` and starts:
 ```sh
 uppr serve --addr 0.0.0.0:${PORT} .
 ```
+
+## Install Uppr as the one system service
+
+From the Uppr source directory, run:
+
+```sh
+./uppr service > uppr.service
+```
+
+This creates `config/.env`, `data/`, and `workspaces.conf` when they are
+missing, then prints a systemd unit for that absolute directory. Before
+installing it, fill in `ADMIN_USERNAME` and `ADMIN_PASSWORD` in
+`config/.env`; `SESSION_SECRET` is generated automatically. Set
+`UPPR_DOMAINS` to one or more comma-separated Caddy hostnames. The bootstrap
+also points `UPPR_WORKSPACES_DIR` at this installation's persistent
+`data/workspaces/` directory.
+
+Install the printed unit manually:
+
+```sh
+sudo cp uppr.service /etc/systemd/system/uppr.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now uppr
+```
+
+The unit runs one generated Docker Compose project containing Uppr itself,
+Caddy, and every configured application. Uppr is built and served the same way
+as the managed apps instead of being started as a separate one-off container.
+The selected directory is mounted at the same absolute path in the Uppr
+container, so its configuration and workspace paths remain valid. Uppr and
+Caddy share `UPPR_DOCKER_NETWORK`, and Caddy routes every `UPPR_DOMAINS`
+hostname to the Uppr service. No separate Caddy system service is needed.
+
+Uppr's public route is rate limited by client IP. The default permits 100
+requests per minute; use `UPPR_RATE_LIMIT_ENABLED`, `UPPR_RATE_LIMIT_EVENTS`,
+`UPPR_RATE_LIMIT_WINDOW`, and `UPPR_RATE_LIMIT_ZONE` in `config/.env` to change
+or disable it.
 
 Optional repo settings can be passed when adding:
 
