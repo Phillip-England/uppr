@@ -880,7 +880,7 @@ func (app *webApp) handleLaunch(w http.ResponseWriter, r *http.Request) {
 		// project. Reconcile that project in place so the Uppr container does not
 		// stop itself before it can start the newly generated services.
 		root = app.serverRoot
-		command = "services=$(docker compose config --services | grep -v '^uppr$') && docker compose up --build -d --remove-orphans $services"
+		command = "services=$(docker compose config --services | grep -v '^uppr$') && docker compose up --build -d --remove-orphans --no-deps $services"
 		notice = "Launch rebuilds and reconciles the remotely managed services while keeping Uppr available. Removed services are cleaned up and named volumes are preserved."
 	}
 	page := launchPage{Root: root, BasePath: app.basePath, Message: r.URL.Query().Get("message"), Command: command, Notice: notice}

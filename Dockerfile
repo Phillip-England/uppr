@@ -18,6 +18,7 @@ RUN apt-get update \
 
 COPY --from=build /usr/local/bin/uppr /usr/local/bin/uppr
 COPY --from=docker_cli /usr/local/bin/docker /usr/local/bin/docker
+COPY --from=docker_cli /usr/local/libexec/docker/cli-plugins/docker-buildx /usr/local/libexec/docker/cli-plugins/docker-buildx
 COPY --from=docker_cli /usr/local/libexec/docker/cli-plugins/docker-compose /usr/local/libexec/docker/cli-plugins/docker-compose
 
 ENV PORT=9944

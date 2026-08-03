@@ -30,6 +30,6 @@ www.phillip-england.com phillip-england.com {
 			window 1m
 		}
 	}
-	reverse_proxy personal-portfolio:8080
+	reverse_proxy personal-portfolio:8112
 }
 

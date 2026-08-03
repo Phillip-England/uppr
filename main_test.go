@@ -1350,7 +1350,7 @@ func TestWebLaunchUsesInPlaceServerReconcile(t *testing.T) {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
 	}
 	body := response.Body.String()
-	if !strings.Contains(body, `grep -v &#39;^uppr$&#39;) &amp;&amp; docker compose up --build -d --remove-orphans $services`) {
+	if !strings.Contains(body, `grep -v &#39;^uppr$&#39;) &amp;&amp; docker compose up --build -d --remove-orphans --no-deps $services`) {
 		t.Fatalf("remote launch should reconcile without stopping Uppr:\n%s", body)
 	}
 	if !strings.Contains(body, `<code class="mono">`+serverRoot+`</code>`) {
@@ -1529,7 +1529,7 @@ func TestGenerateServerFilesBuildsSingleRootCompose(t *testing.T) {
 		t.Fatalf("unexpected master compose:\n%s", masterCompose)
 	}
 	masterMakefile := readTestFile(t, filepath.Join(root, makeFile))
-	if !strings.Contains(masterMakefile, "grep -v '^uppr$$'") || !strings.Contains(masterMakefile, "docker compose up --build -d --remove-orphans $$services") {
+	if !strings.Contains(masterMakefile, "grep -v '^uppr$$'") || !strings.Contains(masterMakefile, "docker compose up --build -d --remove-orphans --no-deps $$services") {
 		t.Fatalf("master launch should reconcile services without restarting Uppr:\n%s", masterMakefile)
 	}
 	if strings.Contains(masterMakefile, "docker compose down --remove-orphans") {
