@@ -268,7 +268,7 @@ func (app *webApp) handleLogout(w http.ResponseWriter, r *http.Request) {
 
 func (app *webApp) requireAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !app.authRequired || r.URL.Path == "/" || r.URL.Path == "/developers" || r.URL.Path == "/login" {
+		if !app.authRequired || r.URL.Path == "/" || r.URL.Path == "/developers" || r.URL.Path == "/login" || r.URL.Path == "/logo.png" {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -422,6 +422,7 @@ var loginTemplate = template.Must(template.New("login").Parse(`<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" type="image/png" href="/logo.png">
 <title>uppr login</title>
 <style>
 :root { color-scheme: light dark; --bg:#f4f1ea; --surface:#fbfaf7; --text:#1f252d; --muted:#657080; --border:#d6d0c5; --accent:#2563eb; --danger:#c94a55; --danger-soft:#fbeaec; }
@@ -430,7 +431,8 @@ var loginTemplate = template.Must(template.New("login").Parse(`<!doctype html>
 body { margin:0; min-height:100vh; display:grid; place-items:center; padding:24px; font:14px/1.45 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color:var(--text); background:var(--bg); }
 main { width:min(100%, 380px); }
 .brand { display:flex; gap:11px; align-items:center; margin-bottom:18px; }
-.brand-mark { width:34px; height:34px; border-radius:8px; display:grid; place-items:center; color:#fff; background:linear-gradient(135deg, var(--accent), #44c78a); font-weight:850; }
+.brand-mark { width:34px; height:34px; border-radius:8px; display:grid; place-items:center; overflow:hidden; }
+.brand-mark img { width:220%; height:220%; max-width:none; }
 .brand-name { font-size:18px; font-weight:760; }
 .subtitle { color:var(--muted); font-size:12px; margin:0; }
 form { display:grid; gap:14px; background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:20px; box-shadow:0 16px 40px rgba(24,29,37,.08); }
@@ -444,7 +446,7 @@ button { min-height:40px; border:1px solid var(--accent); border-radius:8px; bac
 </head>
 <body>
 <main>
-  <div class="brand"><div class="brand-mark">U</div><div class="brand-name">Uppr</div></div>
+  <div class="brand"><div class="brand-mark"><img src="/logo.png" alt=""></div><div class="brand-name">Uppr</div></div>
   <form method="post" action="/login">
     <h1>Log in</h1>
     {{if .Error}}<p class="error">{{.Error}}</p>{{end}}

@@ -1,9 +1,26 @@
 package main
 
 import (
+	_ "embed"
 	"html/template"
 	"net/http"
 )
+
+//go:embed logo.png
+var logoPNG []byte
+
+func handleLogo(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	if r.Method == http.MethodHead {
+		return
+	}
+	_, _ = w.Write(logoPNG)
+}
 
 func (app *webApp) handleDevelopers(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/developers" {
@@ -34,7 +51,7 @@ func publicChrome(title, active, body string) string {
 	if active == "developers" {
 		developerClass = ` class="active"`
 	}
-	return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="description" content="Uppr deploys and operates application repositories with one consistent contract."><title>` + title + `</title><style>` + publicCSS + `</style></head><body><div class="wrap"><nav><a class="brand" href="/"><span class="mark">U</span>Uppr</a><div class="links"><a href="/"` + overviewClass + `>Overview</a><a href="/developers"` + developerClass + `>Developers</a></div></nav></div>` + body + `<footer><div class="wrap">Uppr — a predictable path from repository to running application.</div></footer></body></html>`
+	return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="description" content="Uppr deploys and operates application repositories with one consistent contract."><link rel="icon" type="image/png" href="/logo.png"><title>` + title + `</title><style>` + publicCSS + `.mark{overflow:hidden}.mark img{width:220%;height:220%;max-width:none}</style></head><body><div class="wrap"><nav><a class="brand" href="/"><span class="mark"><img src="/logo.png" alt=""></span>Uppr</a><div class="links"><a href="/"` + overviewClass + `>Overview</a><a href="/developers"` + developerClass + `>Developers</a></div></nav></div>` + body + `<footer><div class="wrap">Uppr — a predictable path from repository to running application.</div></footer></body></html>`
 }
 
 const publicHomeBody = `<main><div class="wrap"><div class="hero"><div class="eyebrow">Repository → running application</div><h1>Give every app the same operational shape.</h1><p class="lede">Uppr organizes repositories into workspaces, prepares their runtime configuration, and generates the Docker and Caddy layer that launches them behind real domains.</p><div class="actions"><a class="button primary" href="/developers">Developer quick start</a><a class="button" href="#how">See how it works</a></div><div class="terminal"><div class="terminal-head">workspace / launch</div><pre><span class="prompt">$</span> uppr pull
