@@ -876,12 +876,10 @@ func (app *webApp) handleLaunch(w http.ResponseWriter, r *http.Request) {
 	command := "docker compose down --remove-orphans && docker compose up --build"
 	notice := "Launch clears the existing Compose stack and orphaned containers before rebuilding it. Named volumes are preserved. Use Ctrl+C in the terminal to stop it."
 	if app.serverRoot != "" {
-		// A remotely managed workspace is part of the server's master Compose
-		// project. Reconcile that project in place so the Uppr container does not
-		// stop itself before it can start the newly generated services.
+		// The server control plane is native; its Compose project contains apps only.
 		root = app.serverRoot
-		command = "services=$(docker compose config --services | grep -v '^uppr$') && docker compose up --build -d --remove-orphans --no-deps $services"
-		notice = "Launch rebuilds and reconciles the remotely managed services while keeping Uppr available. Removed services are cleaned up and named volumes are preserved."
+		command = "docker compose down --remove-orphans && docker compose up --build -d --remove-orphans && caddyx reload --config Caddyfile --adapter caddyfile"
+		notice = "Launch replaces only the managed app containers, then reloads native Caddy. Uppr remains available throughout. Named volumes are preserved."
 	}
 	page := launchPage{Root: root, BasePath: app.basePath, Message: r.URL.Query().Get("message"), Command: command, Notice: notice}
 	if err := launchTemplate.Execute(w, page); err != nil {

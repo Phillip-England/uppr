@@ -106,8 +106,12 @@ func runWithServe(args []string, serve func([]string) error) error {
 		return generateServerFilesAt(absRoot)
 	case "launch":
 		return launchServer(args[1:])
-	case "service":
-		return printService(args[1:])
+	case "install-caddyx":
+		return installCaddyx(args[1:])
+	case "service", "service-uppr":
+		return printUpprService(args[1:])
+	case "service-caddy":
+		return printCaddyService(args[1:])
 	case "service-run":
 		return runService(args[1:], serve)
 	case "web", "ui":
@@ -137,9 +141,12 @@ Usage:
   uppr pull                       clone missing repos and pull existing repos
   uppr push <message>             commit changes in each repo and push
   uppr generate                   write Caddyfile, docker-compose.yml, and Makefile
-  uppr generate-server [path]     write master Caddy/Docker/Make files
-  uppr launch [path]              generate and launch the server Docker Compose stack
-  uppr service [path]             print a systemd unit for a Dockerized Uppr server
+  uppr generate-server [path]     write master Caddy/Compose/Make files
+  uppr launch [path]              rebuild and launch the managed app containers
+  uppr install-caddyx [path]      build Caddy with rate limiting (default ~/.local/bin/caddyx)
+  uppr service-uppr [path]        print a native systemd unit for Uppr
+  uppr service-caddy [path]       print a native systemd unit for Caddy
+  uppr service [path]             alias for service-uppr
   uppr web [path]                 open a browser UI for an uppr project
   uppr serve [path]               serve authenticated web UI for deployment
   uppr <path>                     shorthand for uppr web <path>
@@ -197,12 +204,15 @@ func launchServer(args []string) error {
 	if err := cleanup.Run(); err != nil {
 		return fmt.Errorf("clear existing Docker Compose stack: %w", err)
 	}
-	cmd := exec.Command("docker", "compose", "up", "--build")
+	cmd := exec.Command("docker", "compose", "up", "--build", "-d", "--remove-orphans")
 	cmd.Dir = absRoot
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	if err := cmd.Run(); err != nil {
+		return err
+	}
+	return reloadCaddy(absRoot)
 }
 
 func initProject(args []string) error {

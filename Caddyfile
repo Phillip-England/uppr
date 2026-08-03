@@ -22,7 +22,7 @@ cleaver.phillip-england.com {
 	reverse_proxy personal-cleaver:5544
 }
 
-www.phillip-england.com phillip-england.com {
+www.phillip-england.com, phillip-england.com {
 	rate_limit {
 		zone dynamic {
 			key {remote_host}

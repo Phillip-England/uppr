@@ -45,13 +45,30 @@ func TestRunServeCommandUsesServe(t *testing.T) {
 	}
 }
 
-func TestRenderSystemdServiceRunsTheGeneratedComposeStack(t *testing.T) {
+func TestRenderUpprSystemdServiceRunsUpprNatively(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "uppr root")
-	unit := renderSystemdService(root, "/usr/bin/docker", "uppr:local", "uppr-network")
+	unit := renderUpprSystemdService(root, "/usr/local/bin/uppr")
 	for _, want := range []string{
 		`WorkingDirectory=` + strings.ReplaceAll(root, " ", `\x20`),
-		`compose --env-file "` + filepath.Join(root, envFile) + `" --project-directory "` + root + `" up --build --remove-orphans`,
-		`compose --env-file "` + filepath.Join(root, envFile) + `" --project-directory "` + root + `" down`,
+		`ExecStart="/usr/local/bin/uppr" serve --addr 0.0.0.0:9944 "` + root + `"`,
+	} {
+		if !strings.Contains(unit, want) {
+			t.Fatalf("unit missing %q:\n%s", want, unit)
+		}
+	}
+	if strings.Contains(unit, "docker") {
+		t.Fatalf("native Uppr unit must not depend on Docker Compose:\n%s", unit)
+	}
+}
+
+func TestRenderCaddySystemdServiceRunsCaddyxNatively(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "uppr root")
+	unit := renderCaddySystemdService(root, "/opt/uppr/caddyx")
+	for _, want := range []string{
+		`ExecStart="/opt/uppr/caddyx" run`,
+		`ExecReload="/opt/uppr/caddyx" reload`,
+		"AmbientCapabilities=CAP_NET_BIND_SERVICE",
+		filepath.Join(root, caddyFile),
 	} {
 		if !strings.Contains(unit, want) {
 			t.Fatalf("unit missing %q:\n%s", want, unit)
@@ -1335,7 +1352,7 @@ func TestWebFileShowsWhitelistedProjectFile(t *testing.T) {
 	}
 }
 
-func TestWebLaunchUsesInPlaceServerReconcile(t *testing.T) {
+func TestWebLaunchReplacesAppsWhileNativeUpprStaysRunning(t *testing.T) {
 	workspaceRoot := newTestProject(t)
 	serverRoot := t.TempDir()
 	app := &webApp{
@@ -1350,14 +1367,14 @@ func TestWebLaunchUsesInPlaceServerReconcile(t *testing.T) {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
 	}
 	body := response.Body.String()
-	if !strings.Contains(body, `grep -v &#39;^uppr$&#39;) &amp;&amp; docker compose up --build -d --remove-orphans --no-deps $services`) {
-		t.Fatalf("remote launch should reconcile without stopping Uppr:\n%s", body)
+	if !strings.Contains(body, `docker compose down --remove-orphans &amp;&amp; docker compose up --build -d --remove-orphans &amp;&amp; caddyx reload`) {
+		t.Fatalf("remote launch should replace apps and reload Caddy:\n%s", body)
 	}
 	if !strings.Contains(body, `<code class="mono">`+serverRoot+`</code>`) {
 		t.Fatalf("remote launch should run from server root %q:\n%s", serverRoot, body)
 	}
-	if strings.Contains(body, `data-terminal-command="docker compose down`) {
-		t.Fatalf("remote launch must not stop its own Compose project:\n%s", body)
+	if strings.Contains(body, `grep -v`) {
+		t.Fatalf("remote launch no longer needs to exclude Uppr:\n%s", body)
 	}
 }
 
@@ -1510,41 +1527,58 @@ func TestGenerateServerFilesBuildsSingleRootCompose(t *testing.T) {
 	masterCompose := readTestFile(t, filepath.Join(root, dockerComposeFile))
 	for _, want := range []string{
 		"services:",
-		"  uppr:",
-		"    image: ${UPPR_DOCKER_IMAGE:-uppr:local}",
-		`    command: ["uppr", "serve", "--addr", "0.0.0.0:9944"`,
-		strconv.Quote(filepath.ToSlash(workspace.Path) + ":" + filepath.ToSlash(workspace.Path)),
-		"      - /var/run/docker.sock:/var/run/docker.sock",
-		"  caddy:",
-		"    depends_on:",
-		"      - uppr",
 		"  ops-api:",
 		strconv.Quote(filepath.ToSlash(filepath.Join(workspace.Path, "apps", "api"))),
+		`      - "127.0.0.1:8080:3000"`,
 	} {
 		if !strings.Contains(masterCompose, want) {
 			t.Fatalf("master compose missing %q:\n%s", want, masterCompose)
 		}
 	}
-	if strings.Contains(masterCompose, "include:") || strings.Contains(masterCompose, "8080:3000") {
+	if strings.Contains(masterCompose, "include:") || strings.Contains(masterCompose, "  uppr:") || strings.Contains(masterCompose, "  caddy:") {
 		t.Fatalf("unexpected master compose:\n%s", masterCompose)
 	}
 	masterMakefile := readTestFile(t, filepath.Join(root, makeFile))
-	if !strings.Contains(masterMakefile, "grep -v '^uppr$$'") || !strings.Contains(masterMakefile, "docker compose up --build -d --remove-orphans --no-deps $$services") {
-		t.Fatalf("master launch should reconcile services without restarting Uppr:\n%s", masterMakefile)
-	}
-	if strings.Contains(masterMakefile, "docker compose down --remove-orphans") {
-		t.Fatalf("master launch must not stop Uppr:\n%s", masterMakefile)
+	if !strings.Contains(masterMakefile, "docker compose down --remove-orphans") || !strings.Contains(masterMakefile, "caddyx reload --config Caddyfile") {
+		t.Fatalf("master launch should replace apps and reload native Caddy:\n%s", masterMakefile)
 	}
 	masterCaddy := readTestFile(t, filepath.Join(root, caddyFile))
 	if !strings.Contains(masterCaddy, "uppr.localhost {") ||
 		!strings.Contains(masterCaddy, "zone uppr {") ||
-		!strings.Contains(masterCaddy, "reverse_proxy uppr:9944") ||
+		!strings.Contains(masterCaddy, "reverse_proxy 127.0.0.1:9944") ||
 		!strings.Contains(masterCaddy, "api.localhost {") ||
-		!strings.Contains(masterCaddy, "reverse_proxy ops-api:3000") {
+		!strings.Contains(masterCaddy, "reverse_proxy 127.0.0.1:8080") {
 		t.Fatalf("unexpected master Caddyfile:\n%s", masterCaddy)
 	}
 	if _, err := os.Stat(filepath.Join(workspaceRoot, dockerComposeFile)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("workspace compose should not be generated; stat err = %v", err)
+	}
+}
+
+func TestServerServicesAssignDistinctLoopbackPorts(t *testing.T) {
+	root := t.TempDir()
+	workspace := Workspace{Name: "ops", Path: root}
+	services := []serverService{
+		{Workspace: workspace, Repo: Repo{Name: "one", Port: 3000, ContainerPort: 3000}, Service: "ops-one", HostPort: 3000},
+		{Workspace: workspace, Repo: Repo{Name: "two", Port: 3000, ContainerPort: 3000}, Service: "ops-two", HostPort: 20000},
+	}
+	compose := renderServerDockerCompose(root, services)
+	caddy := renderServerCaddyfile(services, nil, RateLimit{})
+	for _, want := range []string{`127.0.0.1:3000:3000`, `127.0.0.1:20000:3000`} {
+		if !strings.Contains(compose, want) {
+			t.Fatalf("compose missing %q:\n%s", want, compose)
+		}
+	}
+	for _, want := range []string{`127.0.0.1:3000`, `127.0.0.1:20000`} {
+		if !strings.Contains(caddy, want) {
+			t.Fatalf("Caddyfile missing %q:\n%s", want, caddy)
+		}
+	}
+}
+
+func TestEmptyServerComposeIsValidMapping(t *testing.T) {
+	if got := renderServerDockerCompose(t.TempDir(), nil); !strings.Contains(got, "services: {}") {
+		t.Fatalf("empty compose = %q", got)
 	}
 }
 

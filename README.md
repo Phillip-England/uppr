@@ -70,8 +70,8 @@ Set `UPPR_WORKSPACES_DIR` before launching `uppr serve` to choose a deployment
 specific workspace storage directory.
 
 Each workspace has its own `repos.conf` and `config/.env`. The server root has
-`workspaces.conf` plus the generated root `Caddyfile`, `caddyx.Dockerfile`,
-`docker-compose.yml`, and `Makefile` used to launch all registered workspaces.
+`workspaces.conf` plus the generated root `Caddyfile`, `docker-compose.yml`,
+and `Makefile` used to launch all registered workspaces.
 
 `uppr serve` keeps this app's own runtime files in the same layout used by the
 generated apps:
@@ -92,37 +92,43 @@ The included `Dockerfile` exposes port `9944` and starts:
 uppr serve --addr 0.0.0.0:${PORT} .
 ```
 
-## Install Uppr as the one system service
+## Install the native control plane
 
-From the Uppr source directory, run:
+Uppr and Caddy run as independent native services. Docker Compose contains only
+the managed applications, so replacing the app stack cannot stop the UI or
+reverse proxy that initiated the replacement.
+
+Build the rate-limit-enabled Caddy binary, then generate both units:
 
 ```sh
-./uppr service > uppr.service
+./uppr install-caddyx
+./uppr service-uppr . > uppr.service
+./uppr service-caddy . > uppr-caddy.service
 ```
 
-This creates `config/.env`, `data/`, and `workspaces.conf` when they are
-missing, then prints a systemd unit for that absolute directory. Before
-installing it, fill in `ADMIN_USERNAME` and `ADMIN_PASSWORD` in
-`config/.env`; `SESSION_SECRET` is generated automatically. Set
-`UPPR_DOMAINS` to one or more comma-separated Caddy hostnames. The bootstrap
-also points `UPPR_WORKSPACES_DIR` at this installation's persistent
-`data/workspaces/` directory.
+`install-caddyx` writes `~/.local/bin/caddyx` by default; pass a destination
+path to override it. `service-caddy` finds that location, searches `PATH`, or
+uses `CADDYX_PATH`. The service commands create `config/.env`, `data/`, and
+`workspaces.conf` when missing. Before installing the units, fill in
+`ADMIN_USERNAME` and `ADMIN_PASSWORD` in `config/.env`; `SESSION_SECRET` is
+generated automatically. Set `UPPR_DOMAINS` to one or more comma-separated
+Caddy hostnames.
 
 Install the printed unit manually:
 
 ```sh
 sudo cp uppr.service /etc/systemd/system/uppr.service
+sudo cp uppr-caddy.service /etc/systemd/system/uppr-caddy.service
 sudo systemctl daemon-reload
-sudo systemctl enable --now uppr
+sudo systemctl enable --now uppr uppr-caddy
 ```
 
-The unit runs one generated Docker Compose project containing Uppr itself,
-Caddy, and every configured application. Uppr is built and served the same way
-as the managed apps instead of being started as a separate one-off container.
-The selected directory is mounted at the same absolute path in the Uppr
-container, so its configuration and workspace paths remain valid. Uppr and
-Caddy share `UPPR_DOCKER_NETWORK`, and Caddy routes every `UPPR_DOMAINS`
-hostname to the Uppr service. No separate Caddy system service is needed.
+The Uppr unit runs the current executable directly on port 9944. The Caddy unit
+runs `caddyx` directly on ports 80 and 443. Managed app ports are published by
+Docker only on `127.0.0.1`, and the generated Caddyfile proxies to those
+loopback ports. After changing an app, `uppr launch` (or Launch in the web UI)
+can safely replace every app container while both control-plane services remain
+available.
 
 Uppr's public route is rate limited by client IP. The default permits 100
 requests per minute; use `UPPR_RATE_LIMIT_ENABLED`, `UPPR_RATE_LIMIT_EVENTS`,
