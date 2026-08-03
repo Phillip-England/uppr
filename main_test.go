@@ -1561,6 +1561,20 @@ func runTestGit(t *testing.T, dir string, args ...string) {
 	}
 }
 
+func TestGitArgsWithSafeDirectoryIsPerInvocation(t *testing.T) {
+	repoPath := filepath.Join(t.TempDir(), "repo")
+	args := gitArgsWithSafeDirectory("-C", repoPath, "status", "--porcelain")
+	want := []string{"-c", "safe.directory=" + repoPath, "-C", repoPath, "status", "--porcelain"}
+	if !reflect.DeepEqual(args, want) {
+		t.Fatalf("git args = %#v, want %#v", args, want)
+	}
+
+	cloneArgs := []string{"clone", "https://github.com/acme/repo", repoPath}
+	if got := gitArgsWithSafeDirectory(cloneArgs...); !reflect.DeepEqual(got, cloneArgs) {
+		t.Fatalf("clone args = %#v, want unchanged %#v", got, cloneArgs)
+	}
+}
+
 func runTestGitOutput(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command("git", args...)

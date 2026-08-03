@@ -1244,7 +1244,7 @@ func ensureRepoGitignore(repoPath string) error {
 }
 
 func trackedProtectedPaths(repoPath string) ([]string, error) {
-	cmd := exec.Command("git", "-C", repoPath, "ls-files", "--", "config", "data")
+	cmd := exec.Command("git", gitArgsWithSafeDirectory("-C", repoPath, "ls-files", "--", "config", "data")...)
 	output, err := cmd.Output()
 	if err != nil {
 		return nil, err
@@ -1276,7 +1276,7 @@ func repoLabel(repo Repo) string {
 }
 
 func runGit(askPass string, args ...string) error {
-	cmd := exec.Command("git", args...)
+	cmd := exec.Command("git", gitArgsWithSafeDirectory(args...)...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Env = os.Environ()
@@ -1284,6 +1284,26 @@ func runGit(askPass string, args ...string) error {
 		cmd.Env = append(cmd.Env, "GIT_ASKPASS="+askPass, "GIT_TERMINAL_PROMPT=0")
 	}
 	return cmd.Run()
+}
+
+// gitArgsWithSafeDirectory trusts only the repository selected by a -C argument.
+// This is needed when uppr runs in a service container as a different UID from
+// the owner of the bind-mounted workspace. Keeping the exception on each Git
+// invocation avoids accumulating machine-specific entries in global config.
+func gitArgsWithSafeDirectory(args ...string) []string {
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] != "-C" {
+			continue
+		}
+		repoPath, err := filepath.Abs(args[i+1])
+		if err != nil {
+			repoPath = args[i+1]
+		}
+		configured := make([]string, 0, len(args)+2)
+		configured = append(configured, "-c", "safe.directory="+repoPath)
+		return append(configured, args...)
+	}
+	return args
 }
 
 func makeAskPass(username, password string) (string, func(), error) {

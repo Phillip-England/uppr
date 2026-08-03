@@ -1764,7 +1764,7 @@ func repoStatus(root string, repo Repo) repoStatusInfo {
 	if _, err := os.Stat(filepath.Join(repoPath, ".git")); err != nil {
 		return repoStatusInfo{Key: "unknown", Label: "Unknown"}
 	}
-	cmd := exec.Command("git", "-C", repoPath, "status", "--porcelain")
+	cmd := exec.Command("git", gitArgsWithSafeDirectory("-C", repoPath, "status", "--porcelain")...)
 	output, err := cmd.Output()
 	if err != nil {
 		return repoStatusInfo{Key: "error", Label: "Error"}
