@@ -189,6 +189,14 @@ func launchServer(args []string) error {
 	if err := generateServerFilesAt(absRoot); err != nil {
 		return err
 	}
+	cleanup := exec.Command("docker", "compose", "down", "--remove-orphans")
+	cleanup.Dir = absRoot
+	cleanup.Stdin = os.Stdin
+	cleanup.Stdout = os.Stdout
+	cleanup.Stderr = os.Stderr
+	if err := cleanup.Run(); err != nil {
+		return fmt.Errorf("clear existing Docker Compose stack: %w", err)
+	}
 	cmd := exec.Command("docker", "compose", "up", "--build")
 	cmd.Dir = absRoot
 	cmd.Stdin = os.Stdin

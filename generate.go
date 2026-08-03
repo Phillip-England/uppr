@@ -289,6 +289,7 @@ generate:
 	uppr generate
 
 launch: generate
+	docker compose down --remove-orphans
 	docker compose up --build
 
 stop:
@@ -468,6 +469,7 @@ func renderServerMakefile(workspaces []Workspace) string {
 	uppr generate-server
 
 launch: generate
+	docker compose down --remove-orphans
 	docker compose up --build
 
 stop:

@@ -442,6 +442,9 @@ func TestGenerateProjectFilesAt(t *testing.T) {
 	if !strings.Contains(makefile, "launch: generate") {
 		t.Fatalf("unexpected Makefile:\n%s", makefile)
 	}
+	if !strings.Contains(makefile, "docker compose down --remove-orphans") {
+		t.Fatalf("Makefile launch should clear stale containers:\n%s", makefile)
+	}
 }
 
 func TestGenerateProjectFilesUsesDockerfileExposeForPorts(t *testing.T) {

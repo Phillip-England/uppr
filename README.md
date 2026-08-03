@@ -281,7 +281,9 @@ At the server root, launch the whole system with:
 ```
 
 `uppr launch` creates any missing server files, regenerates the root runtime
-files from all registered workspaces, and runs `docker compose up --build` from
+files from all registered workspaces, clears that Compose project's existing
+containers and orphans (while preserving named volumes), and runs
+`docker compose up --build` from
 the server root.
 
 You can generate the root runtime files without launching Docker with:
