@@ -529,6 +529,7 @@ func TestGenerateProjectFilesAt(t *testing.T) {
 		"    image: uppr-caddyx:latest",
 		"  api:",
 		"      context: ./apps/api",
+		"    working_dir: /app",
 		"    env_file:",
 		"      - ./apps/api/config/.env",
 		"      - \"8080:3000\"",
@@ -1536,6 +1537,38 @@ func TestWebLaunchKeepsInteractiveLocalCommand(t *testing.T) {
 	}
 }
 
+func TestWebIssuesShowsFailedServiceAndRecentLogs(t *testing.T) {
+	root := newTestProject(t)
+	bin := t.TempDir()
+	docker := `#!/bin/sh
+if [ "$2" = "ps" ]; then
+  printf '%s\n' '{"Service":"personal-cleaver","Name":"uppr-personal-cleaver-1","State":"restarting","Status":"Restarting (1)","ExitCode":1}'
+  exit 0
+fi
+if [ "$2" = "logs" ]; then
+  printf '%s\n' 'personal-cleaver-1 | config/.env: no such file or directory'
+  exit 0
+fi
+exit 1
+`
+	if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(docker), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	response := getWeb(t, &webApp{root: root}, "/issues")
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
+	}
+	body := response.Body.String()
+	for _, want := range []string{"personal-cleaver", "Needs attention", "Restarting (1)", "config/.env: no such file or directory", "Recent logs"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("issues page missing %q:\n%s", want, body)
+		}
+	}
+}
+
 func TestWebFileShowsMissingGeneratedFile(t *testing.T) {
 	root := newTestProject(t)
 	app := &webApp{root: root}
@@ -1710,7 +1743,7 @@ func TestServerServicesAssignDistinctLoopbackPorts(t *testing.T) {
 	}
 	compose := renderServerDockerCompose(root, services)
 	caddy := renderServerCaddyfile(services, nil, RateLimit{})
-	for _, want := range []string{`127.0.0.1:3000:3000`, `127.0.0.1:20000:3000`} {
+	for _, want := range []string{`127.0.0.1:3000:3000`, `127.0.0.1:20000:3000`, `working_dir: /app`} {
 		if !strings.Contains(compose, want) {
 			t.Fatalf("compose missing %q:\n%s", want, compose)
 		}

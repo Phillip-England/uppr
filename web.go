@@ -233,6 +233,17 @@ type launchPage struct {
 	Notice                                     string
 }
 
+type issuesPage struct {
+	Root, BasePath, ActiveRepo, Message, Error string
+	Services                                   []containerIssue
+	CheckedAt                                  string
+}
+
+type containerIssue struct {
+	Service, Container, State, Health, Status, ExitCode, Logs string
+	Problem                                                   bool
+}
+
 type terminalPage struct {
 	Root, BasePath, ActiveRepo, Message, Error string
 }
@@ -286,6 +297,7 @@ func (app *webApp) routes() http.Handler {
 	mux.HandleFunc("/sync/prepare", app.handleSyncPrepare)
 	mux.HandleFunc("/launch", app.handleLaunch)
 	mux.HandleFunc("/launch/shell", app.handleLaunchShell)
+	mux.HandleFunc("/issues", app.handleIssues)
 	mux.HandleFunc("/credentials", app.handleCredentials)
 	return securityHeaders(app.requireAuth(mux))
 }
@@ -417,6 +429,7 @@ func (app *webApp) workspaceRoutes() http.Handler {
 	mux.HandleFunc("/sync/prepare", app.handleSyncPrepare)
 	mux.HandleFunc("/launch", app.handleLaunch)
 	mux.HandleFunc("/launch/shell", app.handleLaunchShell)
+	mux.HandleFunc("/issues", app.handleIssues)
 	mux.HandleFunc("/credentials", app.handleCredentials)
 	return mux
 }
@@ -910,6 +923,84 @@ func (app *webApp) handleLaunchShell(w http.ResponseWriter, r *http.Request) {
 		root = app.serverRoot
 	}
 	app.handleShell(w, r, root)
+}
+
+func (app *webApp) handleIssues(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	root := app.root
+	if app.serverRoot != "" {
+		root = app.serverRoot
+	}
+	services, err := readContainerIssues(root)
+	page := issuesPage{
+		Root: root, BasePath: app.basePath, Services: services,
+		CheckedAt: time.Now().Format("Jan 2, 2006 3:04:05 PM MST"),
+	}
+	if err != nil {
+		page.Error = err.Error()
+	}
+	if err := issuesTemplate.Execute(w, page); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+func readContainerIssues(root string) ([]containerIssue, error) {
+	cmd := exec.Command("docker", "compose", "ps", "-a", "--format", "json")
+	cmd.Dir = root
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		detail := strings.TrimSpace(string(output))
+		if detail == "" {
+			detail = err.Error()
+		}
+		return nil, fmt.Errorf("Docker status is unavailable: %s", detail)
+	}
+	type composeStatus struct {
+		Service, Name, State, Health, Status string
+		ExitCode                             int
+	}
+	var rows []composeStatus
+	trimmed := bytes.TrimSpace(output)
+	if len(trimmed) != 0 {
+		if trimmed[0] == '[' {
+			if err := json.Unmarshal(trimmed, &rows); err != nil {
+				return nil, fmt.Errorf("read Docker status: %w", err)
+			}
+		} else {
+			decoder := json.NewDecoder(bytes.NewReader(trimmed))
+			for {
+				var row composeStatus
+				if err := decoder.Decode(&row); errors.Is(err, io.EOF) {
+					break
+				} else if err != nil {
+					return nil, fmt.Errorf("read Docker status: %w", err)
+				}
+				rows = append(rows, row)
+			}
+		}
+	}
+	issues := make([]containerIssue, 0, len(rows))
+	for _, row := range rows {
+		state := strings.ToLower(strings.TrimSpace(row.State))
+		health := strings.ToLower(strings.TrimSpace(row.Health))
+		problem := state != "running" || (health != "" && health != "healthy")
+		logs := exec.Command("docker", "compose", "logs", "--no-color", "--tail", "120", row.Service)
+		logs.Dir = root
+		logOutput, logErr := logs.CombinedOutput()
+		logText := strings.TrimSpace(string(logOutput))
+		if logErr != nil && logText == "" {
+			logText = "Logs unavailable: " + logErr.Error()
+		}
+		exitCode := "—"
+		if row.ExitCode != 0 || state == "exited" || state == "dead" {
+			exitCode = strconv.Itoa(row.ExitCode)
+		}
+		issues = append(issues, containerIssue{Service: row.Service, Container: row.Name, State: row.State, Health: row.Health, Status: row.Status, ExitCode: exitCode, Logs: logText, Problem: problem})
+	}
+	return issues, nil
 }
 
 func (app *webApp) handleSyncPull(w http.ResponseWriter, r *http.Request) {
@@ -1857,6 +1948,7 @@ var fileTemplate = template.Must(template.New("file").Funcs(webFuncs).Parse(page
 var syncTemplate = template.Must(template.New("sync").Funcs(webFuncs).Parse(pageChrome(syncBody)))
 var terminalTemplate = template.Must(template.New("terminal").Funcs(webFuncs).Parse(pageChrome(terminalBody + terminalAssets)))
 var launchTemplate = template.Must(template.New("launch").Funcs(webFuncs).Parse(pageChrome(launchBody + terminalAssets)))
+var issuesTemplate = template.Must(template.New("issues").Funcs(webFuncs).Parse(pageChrome(issuesBody)))
 var credentialsTemplate = template.Must(template.New("credentials").Funcs(webFuncs).Parse(pageChrome(credentialsBody)))
 
 func pageChrome(body string) string {
@@ -2091,6 +2183,15 @@ body.drawer-open .drawer { transform:translateX(0); }
 .split-actions { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:14px; }
 .danger-panel { border-color:rgba(239,106,115,.35); }
 .technical-details { max-width:680px; }
+.issue-list { display:grid; gap:14px; }
+.issue-card { border:1px solid var(--border); border-radius:var(--radius-md); background:var(--surface); overflow:hidden; }
+.issue-card--problem { border-color:rgba(239,106,115,.48); }
+.issue-card__header { display:flex; align-items:flex-start; justify-content:space-between; gap:14px; padding:16px; }
+.issue-card__meta { display:flex; flex-wrap:wrap; gap:8px; margin-top:9px; }
+.issue-logs { margin:0; max-height:360px; overflow:auto; border-top:1px solid var(--border); background:#090b0e; color:#d8dee9; padding:14px; white-space:pre-wrap; overflow-wrap:anywhere; font:12px/1.55 "SFMono-Regular",Consolas,monospace; }
+.diagnostic-summary { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; margin-bottom:18px; }
+.diagnostic-stat { padding:14px; border:1px solid var(--border); border-radius:var(--radius-sm); background:var(--surface-muted); }
+.diagnostic-stat strong { display:block; margin-top:3px; font-size:18px; }
 [hidden] { display:none !important; }
 @media (max-width: 900px) {
   .app-layout { display:block; }
@@ -2108,7 +2209,7 @@ body.drawer-open .drawer { transform:translateX(0); }
   .toolbar-controls, .inline-actions { width:100%; }
   .toolbar-controls > *, .inline-actions > *, .inline-actions form, .inline-actions button, .inline-actions .button { flex:1 1 auto; }
   .panel { padding:14px; }
-  .grid-2, .grid-3 { grid-template-columns:1fr; }
+  .grid-2, .grid-3, .diagnostic-summary { grid-template-columns:1fr; }
   .repo-table { display:block; overflow:auto; }
   .repo-card-grid { grid-template-columns:1fr; }
   .file-browser { grid-template-columns:1fr; }
@@ -2152,6 +2253,7 @@ body.drawer-open .drawer { transform:translateX(0); }
     <a href="{{.BasePath}}/terminal" data-nav-link data-mobile-close><span class="nav-icon">$_</span>Terminal</a>
     <a href="{{.BasePath}}/sync" data-nav-link data-mobile-close><span class="nav-icon">&lt;&gt;</span>Sync</a>
     <a href="{{.BasePath}}/launch" data-nav-link data-mobile-close><span class="nav-icon">&gt;</span>Launch</a>
+    <a href="{{.BasePath}}/issues" data-nav-link data-mobile-close><span class="nav-icon">!</span>Issues</a>
   </nav>
 </div>
 <div class="app-layout">
@@ -2175,6 +2277,7 @@ body.drawer-open .drawer { transform:translateX(0); }
       <a href="{{.BasePath}}/terminal" data-nav-link><span class="nav-icon">$_</span>Terminal</a>
       <a href="{{.BasePath}}/sync" data-nav-link><span class="nav-icon">&lt;&gt;</span>Sync</a>
       <a href="{{.BasePath}}/launch" data-nav-link><span class="nav-icon">&gt;</span>Launch</a>
+      <a href="{{.BasePath}}/issues" data-nav-link><span class="nav-icon">!</span>Issues</a>
     </nav>
     <div class="sidebar-footer">
       <button class="button theme-toggle" type="button" data-theme-toggle aria-pressed="false">Dark Mode</button>
@@ -3189,5 +3292,39 @@ const launchBody = `
   <div class="section-heading"><div><h2>Launch terminal</h2><p>Generate files first when repository configuration has changed.</p></div><div class="inline-actions"><form method="post" action="{{.BasePath}}/generate" data-loading-label="Generating..."><button class="button" type="submit">Generate files</button></form><button class="button button--primary" type="button" data-terminal-command="{{.Command}}">Launch stack</button></div></div>
   <div class="notice">{{.Notice}}</div>
   <div class="terminal" data-shell data-shell-url="{{.BasePath}}/launch/shell" data-shell-root="{{.Root}}"><div class="terminal-toolbar"><code class="mono">{{.Root}}</code><span class="terminal-status" data-terminal-status aria-live="polite">Connecting...</span></div><div class="terminal-viewport" data-terminal-viewport></div></div>
+</section>
+`
+
+const issuesBody = `
+<header class="page-header">
+  <div><h1>Container issues</h1><p class="page-description">See what is running, what failed, and the latest output from every managed service.</p></div>
+  <div class="inline-actions"><a class="button" href="{{.BasePath}}/issues">Refresh status</a><a class="button button--primary" href="{{.BasePath}}/launch">Open launch</a></div>
+</header>
+<section class="panel">
+  <div class="section-heading"><div><span class="eyebrow">Live Docker snapshot</span><h2>Compose services</h2><p>Checked {{.CheckedAt}} from <span class="mono">{{.Root}}</span></p></div></div>
+  {{if .Services}}
+  <div class="diagnostic-summary">
+    <div class="diagnostic-stat"><span class="eyebrow">Services found</span><strong>{{len .Services}}</strong></div>
+    <div class="diagnostic-stat"><span class="eyebrow">Source</span><strong>Docker Compose</strong></div>
+    <div class="diagnostic-stat"><span class="eyebrow">Log window</span><strong>Last 120 lines</strong></div>
+  </div>
+  <div class="issue-list">
+  {{range .Services}}
+    <article class="issue-card {{if .Problem}}issue-card--problem{{end}}">
+      <div class="issue-card__header">
+        <div><h3>{{.Service}}</h3><p class="muted mono">{{.Container}}</p><div class="issue-card__meta"><span class="badge">State: {{if .State}}{{.State}}{{else}}unknown{{end}}</span>{{if .Health}}<span class="badge">Health: {{.Health}}</span>{{end}}<span class="badge">Exit: {{.ExitCode}}</span>{{if .Status}}<span class="badge">{{.Status}}</span>{{end}}</div></div>
+        {{if .Problem}}<span class="status status--error"><span class="status-dot"></span>Needs attention</span>{{else}}<span class="status status--synced"><span class="status-dot"></span>Running</span>{{end}}
+      </div>
+      <details {{if .Problem}}open{{end}}><summary class="button button--small" style="margin:0 16px 14px">Recent logs</summary><pre class="issue-logs">{{if .Logs}}{{.Logs}}{{else}}No log output yet.{{end}}</pre></details>
+    </article>
+  {{end}}
+  </div>
+  {{else if not .Error}}
+  <div class="empty-state"><h3>No containers found</h3><p>This Compose project has not been launched yet. Open Launch to build and start it.</p><a class="button button--primary" href="{{.BasePath}}/launch" style="margin-top:14px">Open launch</a></div>
+  {{end}}
+</section>
+<section class="panel technical-details">
+  <div class="section-heading"><div><h2>Manual troubleshooting</h2><p>Run these from the deployment root when you need a longer or continuously updating view.</p></div></div>
+  <div class="preview-box"><code>docker compose ps -a</code><code>docker compose logs --tail 200 &lt;service&gt;</code><code>docker compose logs -f &lt;service&gt;</code></div>
 </section>
 `
