@@ -469,8 +469,7 @@ func renderServerMakefile(workspaces []Workspace) string {
 	uppr generate-server
 
 launch: generate
-	docker compose down --remove-orphans
-	docker compose up --build
+	services="$$(docker compose config --services | grep -v '^uppr$$')" && docker compose up --build -d --remove-orphans $$services
 
 stop:
 	docker compose down

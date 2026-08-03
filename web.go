@@ -229,6 +229,8 @@ type syncItem struct {
 
 type launchPage struct {
 	Root, BasePath, ActiveRepo, Message, Error string
+	Command                                    string
+	Notice                                     string
 }
 
 type terminalPage struct {
@@ -870,13 +872,30 @@ func (app *webApp) handleLaunch(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	page := launchPage{Root: app.root, BasePath: app.basePath, Message: r.URL.Query().Get("message")}
+	root := app.root
+	command := "docker compose down --remove-orphans && docker compose up --build"
+	notice := "Launch clears the existing Compose stack and orphaned containers before rebuilding it. Named volumes are preserved. Use Ctrl+C in the terminal to stop it."
+	if app.serverRoot != "" {
+		// A remotely managed workspace is part of the server's master Compose
+		// project. Reconcile that project in place so the Uppr container does not
+		// stop itself before it can start the newly generated services.
+		root = app.serverRoot
+		command = "services=$(docker compose config --services | grep -v '^uppr$') && docker compose up --build -d --remove-orphans $services"
+		notice = "Launch rebuilds and reconciles the remotely managed services while keeping Uppr available. Removed services are cleaned up and named volumes are preserved."
+	}
+	page := launchPage{Root: root, BasePath: app.basePath, Message: r.URL.Query().Get("message"), Command: command, Notice: notice}
 	if err := launchTemplate.Execute(w, page); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
 
-func (app *webApp) handleLaunchShell(w http.ResponseWriter, r *http.Request) { app.handleShell(w, r, app.root) }
+func (app *webApp) handleLaunchShell(w http.ResponseWriter, r *http.Request) {
+	root := app.root
+	if app.serverRoot != "" {
+		root = app.serverRoot
+	}
+	app.handleShell(w, r, root)
+}
 
 func (app *webApp) handleSyncPull(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -3150,8 +3169,8 @@ const terminalBody = `
 const launchBody = `
 <header class="page-header"><div><h1>Launch application</h1><p class="page-description">Start the Docker Compose stack and watch its output live.</p></div></header>
 <section class="panel">
-  <div class="section-heading"><div><h2>Launch terminal</h2><p>Generate files first when repository configuration has changed.</p></div><div class="inline-actions"><form method="post" action="{{.BasePath}}/generate" data-loading-label="Generating..."><button class="button" type="submit">Generate files</button></form><button class="button button--primary" type="button" data-terminal-command="docker compose down --remove-orphans &amp;&amp; docker compose up --build">Launch stack</button></div></div>
-  <div class="notice">Launch clears the existing Compose stack and orphaned containers before rebuilding it. Named volumes are preserved. Use Ctrl+C in the terminal to stop it.</div>
+  <div class="section-heading"><div><h2>Launch terminal</h2><p>Generate files first when repository configuration has changed.</p></div><div class="inline-actions"><form method="post" action="{{.BasePath}}/generate" data-loading-label="Generating..."><button class="button" type="submit">Generate files</button></form><button class="button button--primary" type="button" data-terminal-command="{{.Command}}">Launch stack</button></div></div>
+  <div class="notice">{{.Notice}}</div>
   <div class="terminal" data-shell data-shell-url="{{.BasePath}}/launch/shell" data-shell-root="{{.Root}}"><div class="terminal-toolbar"><code class="mono">{{.Root}}</code><span class="terminal-status" data-terminal-status aria-live="polite">Connecting...</span></div><div class="terminal-viewport" data-terminal-viewport></div></div>
 </section>
 `

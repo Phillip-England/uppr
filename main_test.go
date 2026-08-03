@@ -1335,6 +1335,46 @@ func TestWebFileShowsWhitelistedProjectFile(t *testing.T) {
 	}
 }
 
+func TestWebLaunchUsesInPlaceServerReconcile(t *testing.T) {
+	workspaceRoot := newTestProject(t)
+	serverRoot := t.TempDir()
+	app := &webApp{
+		root:       workspaceRoot,
+		serverRoot: serverRoot,
+		basePath:   "/workspaces/personal",
+	}
+
+	response := getWeb(t, app, "/launch")
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
+	}
+	body := response.Body.String()
+	if !strings.Contains(body, `grep -v &#39;^uppr$&#39;) &amp;&amp; docker compose up --build -d --remove-orphans $services`) {
+		t.Fatalf("remote launch should reconcile without stopping Uppr:\n%s", body)
+	}
+	if !strings.Contains(body, `<code class="mono">`+serverRoot+`</code>`) {
+		t.Fatalf("remote launch should run from server root %q:\n%s", serverRoot, body)
+	}
+	if strings.Contains(body, `data-terminal-command="docker compose down`) {
+		t.Fatalf("remote launch must not stop its own Compose project:\n%s", body)
+	}
+}
+
+func TestWebLaunchKeepsInteractiveLocalCommand(t *testing.T) {
+	root := newTestProject(t)
+	app := &webApp{root: root}
+
+	response := getWeb(t, app, "/launch")
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
+	}
+	if body := response.Body.String(); !strings.Contains(body, `data-terminal-command="docker compose down --remove-orphans &amp;&amp; docker compose up --build"`) {
+		t.Fatalf("local launch command changed unexpectedly:\n%s", body)
+	}
+}
+
 func TestWebFileShowsMissingGeneratedFile(t *testing.T) {
 	root := newTestProject(t)
 	app := &webApp{root: root}
@@ -1487,6 +1527,13 @@ func TestGenerateServerFilesBuildsSingleRootCompose(t *testing.T) {
 	}
 	if strings.Contains(masterCompose, "include:") || strings.Contains(masterCompose, "8080:3000") {
 		t.Fatalf("unexpected master compose:\n%s", masterCompose)
+	}
+	masterMakefile := readTestFile(t, filepath.Join(root, makeFile))
+	if !strings.Contains(masterMakefile, "grep -v '^uppr$$'") || !strings.Contains(masterMakefile, "docker compose up --build -d --remove-orphans $$services") {
+		t.Fatalf("master launch should reconcile services without restarting Uppr:\n%s", masterMakefile)
+	}
+	if strings.Contains(masterMakefile, "docker compose down --remove-orphans") {
+		t.Fatalf("master launch must not stop Uppr:\n%s", masterMakefile)
 	}
 	masterCaddy := readTestFile(t, filepath.Join(root, caddyFile))
 	if !strings.Contains(masterCaddy, "uppr.localhost {") ||

@@ -44,6 +44,16 @@ services:
       - "/home/deploy/.local/share/uppr/workspaces/personal/apps/cleaver/config:/app/config"
       - "/home/deploy/.local/share/uppr/workspaces/personal/apps/cleaver/data:/app/data"
 
+  personal-portfolio:
+    build:
+      context: "/home/deploy/.local/share/uppr/workspaces/personal/apps/portfolio"
+    restart: unless-stopped
+    env_file:
+      - "/home/deploy/.local/share/uppr/workspaces/personal/apps/portfolio/config/.env"
+    volumes:
+      - "/home/deploy/.local/share/uppr/workspaces/personal/apps/portfolio/config:/app/config"
+      - "/home/deploy/.local/share/uppr/workspaces/personal/apps/portfolio/data:/app/data"
+
 volumes:
   caddy_data:
   caddy_config:
