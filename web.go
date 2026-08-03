@@ -2048,9 +2048,10 @@ textarea { min-height:124px; resize:vertical; white-space:pre-wrap; }
 body.drawer-open .drawer-backdrop { opacity:1; pointer-events:auto; }
 body.drawer-open .drawer { transform:translateX(0); }
 .preview-box { display:grid; gap:10px; border:1px solid var(--border); border-radius:var(--radius-sm); background:var(--surface-muted); padding:12px; }
-.env-fields { display:grid; gap:10px; }
-.env-row { display:grid; grid-template-columns:minmax(150px, 280px) minmax(0, 1fr); gap:10px; align-items:center; }
-.env-key { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--text-muted); }
+.env-fields { display:grid; gap:12px; }
+.env-row { display:grid; grid-template-columns:minmax(180px, 1fr) minmax(320px, 2fr); gap:14px; align-items:start; }
+.env-row > div { min-width:0; }
+.env-key { margin:11px 0 0; overflow-wrap:anywhere; color:var(--text-muted); }
 .split-actions { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:14px; }
 .danger-panel { border-color:rgba(239,106,115,.35); }
 .technical-details { max-width:680px; }
@@ -2079,6 +2080,7 @@ body.drawer-open .drawer { transform:translateX(0); }
   .terminal { height:460px; min-height:360px; }
   .terminal--compact { height:280px; min-height:240px; }
   .env-row { grid-template-columns:1fr; gap:6px; }
+  .env-key { margin:0; }
 }
 @media (max-width: 560px) {
   .repo-card__header, .repo-card__actions { align-items:stretch; flex-direction:column; }
@@ -2858,36 +2860,35 @@ const repoBody = `
 
     <input type="hidden" name="env" value="{{joinLines .Repo.Env}}">
 
-    <div class="field-grid grid-2">
-      <div class="field">
-        <label>App Environment</label>
-        {{if .AppEnv}}
-        <div class="env-fields">
-          {{range .AppEnv}}
-          <div class="env-row">
-            <label class="env-key mono" for="app-env-{{.Key}}" title="{{.Key}}">{{.Key}}</label>
-            <div>
-              <input type="hidden" name="app_env_key" value="{{.Key}}">
-              <input class="mono" id="app-env-{{.Key}}" name="app_env_value" value="{{.Value}}" {{if .Example}}placeholder="{{.Example}}"{{end}} autocomplete="off">
-              {{if .Description}}<p class="help">{{.Description}}</p>{{end}}
-              {{if .Example}}<p class="help">Example: <code class="mono">{{.Example}}</code></p>{{end}}
-            </div>
+    <div class="field">
+      <label>App Environment</label>
+      {{if .AppEnv}}
+      <div class="env-fields">
+        {{range .AppEnv}}
+        <div class="env-row">
+          <label class="env-key mono" for="app-env-{{.Key}}">{{.Key}}</label>
+          <div>
+            <input type="hidden" name="app_env_key" value="{{.Key}}">
+            <input class="mono" id="app-env-{{.Key}}" name="app_env_value" value="{{.Value}}" {{if .Example}}placeholder="{{.Example}}"{{end}} autocomplete="off">
+            {{if .Description}}<p class="help">{{.Description}}</p>{{end}}
+            {{if .Example}}<p class="help">Example: <code class="mono">{{.Example}}</code></p>{{end}}
           </div>
-          {{end}}
-        </div>
-        <p class="help">Saved to <code class="mono">{{.AppEnvPath}}</code>.</p>
-        {{else}}
-        <div class="empty-state">
-          <h3>No environment schema found</h3>
-          <p>Pull the repository or add schema.json at the app root.</p>
         </div>
         {{end}}
       </div>
-      <div class="field">
-        <label for="repo-volumes">Volumes</label>
-        <textarea class="mono" id="repo-volumes" name="volumes" placeholder="./data/api:/app/data">{{joinLines .Repo.Volumes}}</textarea>
-        <p class="help">One Docker volume mapping per line.</p>
+      <p class="help">Saved to <code class="mono">{{.AppEnvPath}}</code>.</p>
+      {{else}}
+      <div class="empty-state">
+        <h3>No environment schema found</h3>
+        <p>Pull the repository or add schema.json at the app root.</p>
       </div>
+      {{end}}
+    </div>
+
+    <div class="field">
+      <label for="repo-volumes">Volumes</label>
+      <textarea class="mono" id="repo-volumes" name="volumes" placeholder="./data/api:/app/data">{{joinLines .Repo.Volumes}}</textarea>
+      <p class="help">One Docker volume mapping per line.</p>
     </div>
 
     <div class="form-actions" style="margin-top:18px; justify-content:flex-end;">
