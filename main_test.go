@@ -439,7 +439,7 @@ func TestGenerateProjectFilesAt(t *testing.T) {
 		t.Fatalf("compose should protect /app/data from custom mounts:\n%s", compose)
 	}
 	for _, want := range []string{
-		"api.localhost www.api.localhost {",
+		"api.localhost, www.api.localhost {",
 		"rate_limit {",
 		"zone clients {",
 		"events 25",

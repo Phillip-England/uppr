@@ -8,7 +8,7 @@ uppr.phillip-england.com {
 			window 1m
 		}
 	}
-	reverse_proxy uppr:9944
+	reverse_proxy 127.0.0.1:9944
 }
 
 cleaver.phillip-england.com {
@@ -19,7 +19,7 @@ cleaver.phillip-england.com {
 			window 1m
 		}
 	}
-	reverse_proxy personal-cleaver:5544
+	reverse_proxy 127.0.0.1:5544
 }
 
 www.phillip-england.com, phillip-england.com {
@@ -30,6 +30,5 @@ www.phillip-england.com, phillip-england.com {
 			window 1m
 		}
 	}
-	reverse_proxy personal-portfolio:8112
+	reverse_proxy 127.0.0.1:8112
 }
-

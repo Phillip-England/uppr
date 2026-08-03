@@ -4,7 +4,9 @@ generate:
 	uppr generate-server
 
 launch: generate
-	services="$$(docker compose config --services | grep -v '^uppr$$')" && docker compose up --build -d --remove-orphans --no-deps $$services
+	docker compose down --remove-orphans
+	docker compose up --build -d --remove-orphans
+	caddyx reload --config Caddyfile --adapter caddyfile
 
 stop:
 	docker compose down
