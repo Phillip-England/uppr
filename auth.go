@@ -422,7 +422,8 @@ var loginTemplate = template.Must(template.New("login").Parse(`<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<link rel="icon" type="image/png" href="/logo.png">
+<link rel="icon" type="image/png" href="/logo.png?v=2">
+<link rel="apple-touch-icon" href="/logo.png?v=2">
 <title>uppr login</title>
 <style>
 :root { color-scheme: light dark; --bg:#f4f1ea; --surface:#fbfaf7; --text:#1f252d; --muted:#657080; --border:#d6d0c5; --accent:#2563eb; --danger:#c94a55; --danger-soft:#fbeaec; }
@@ -431,8 +432,8 @@ var loginTemplate = template.Must(template.New("login").Parse(`<!doctype html>
 body { margin:0; min-height:100vh; display:grid; place-items:center; padding:24px; font:14px/1.45 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color:var(--text); background:var(--bg); }
 main { width:min(100%, 380px); }
 .brand { display:flex; gap:11px; align-items:center; margin-bottom:18px; }
-.brand-mark { width:34px; height:34px; border-radius:8px; display:grid; place-items:center; overflow:hidden; }
-.brand-mark img { width:220%; height:220%; max-width:none; }
+.brand-mark { width:42px; height:42px; border:1px solid var(--border); border-radius:11px; display:grid; place-items:center; background:linear-gradient(145deg,var(--surface),var(--bg)); box-shadow:0 8px 24px rgba(37,99,235,.12); }
+.brand-mark img { width:34px; height:34px; display:block; object-fit:contain; }
 .brand-name { font-size:18px; font-weight:760; }
 .subtitle { color:var(--muted); font-size:12px; margin:0; }
 form { display:grid; gap:14px; background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:20px; box-shadow:0 16px 40px rgba(24,29,37,.08); }
@@ -446,7 +447,7 @@ button { min-height:40px; border:1px solid var(--accent); border-radius:8px; bac
 </head>
 <body>
 <main>
-  <div class="brand"><div class="brand-mark"><img src="/logo.png" alt=""></div><div class="brand-name">Uppr</div></div>
+  <div class="brand"><div class="brand-mark"><img src="/logo.png?v=2" alt=""></div><div class="brand-name">Uppr</div></div>
   <form method="post" action="/login">
     <h1>Log in</h1>
     {{if .Error}}<p class="error">{{.Error}}</p>{{end}}

@@ -1957,7 +1957,8 @@ func pageChrome(body string) string {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<link rel="icon" type="image/png" href="/logo.png">
+<link rel="icon" type="image/png" href="/logo.png?v=2">
+<link rel="apple-touch-icon" href="/logo.png?v=2">
 <title>uppr</title>
 <script>
 (function () {
@@ -2068,8 +2069,8 @@ h3 { font-size:15px; line-height:1.25; }
 .app-layout { min-height:100vh; display:grid; grid-template-columns:var(--sidebar-width) minmax(0, 1fr); }
 .sidebar { position:sticky; top:0; height:100vh; border-right:1px solid var(--border); background:var(--sidebar-bg); padding:18px 14px; display:flex; flex-direction:column; gap:18px; }
 .brand { display:flex; gap:11px; align-items:center; padding:4px 8px 12px; }
-.brand-mark { width:34px; height:34px; border-radius:8px; display:grid; place-items:center; overflow:hidden; flex:0 0 auto; }
-.brand-mark img { width:220%; height:220%; max-width:none; }
+.brand-mark { width:38px; height:38px; border:1px solid var(--border); border-radius:10px; display:grid; place-items:center; flex:0 0 auto; background:linear-gradient(145deg,var(--surface),var(--surface-muted)); box-shadow:0 6px 18px rgba(37,99,235,.10); }
+.brand-mark img { width:31px; height:31px; display:block; object-fit:contain; }
 .brand-name { font-size:17px; font-weight:760; }
 .active-context { margin:-10px 8px 0; padding:9px 10px; border:1px solid var(--border); border-radius:var(--radius-sm); background:var(--surface-muted); min-width:0; }
 .active-context .eyebrow { margin-bottom:3px; }
@@ -2230,7 +2231,7 @@ body.drawer-open .drawer { transform:translateX(0); }
 <body>
 <div class="mobile-bar">
   <div class="brand">
-    <div class="brand-mark"><img src="/logo.png" alt=""></div>
+    <div class="brand-mark"><img src="/logo.png?v=2" alt=""></div>
     <div><div class="brand-name">Uppr</div><p class="subtitle">{{if .ActiveRepo}}Repo: {{.ActiveRepo}}{{else}}Infrastructure workspace{{end}}</p></div>
   </div>
   <button class="button button--small hamburger" type="button" data-mobile-menu aria-label="Open navigation" aria-controls="mobile-navigation" aria-expanded="false"><span class="hamburger-lines" aria-hidden="true"><span></span><span></span><span></span></span></button>
@@ -2239,7 +2240,7 @@ body.drawer-open .drawer { transform:translateX(0); }
 <div class="mobile-nav-panel" id="mobile-navigation">
   <div class="mobile-nav-header">
     <div class="brand">
-      <div class="brand-mark"><img src="/logo.png" alt=""></div>
+      <div class="brand-mark"><img src="/logo.png?v=2" alt=""></div>
       <div><div class="brand-name">Uppr</div><p class="subtitle">Infrastructure workspace</p></div>
     </div>
     <button class="button button--small" type="button" data-mobile-close>Close</button>
@@ -2259,7 +2260,7 @@ body.drawer-open .drawer { transform:translateX(0); }
 <div class="app-layout">
   <aside class="sidebar">
     <div class="brand">
-      <div class="brand-mark"><img src="/logo.png" alt=""></div>
+      <div class="brand-mark"><img src="/logo.png?v=2" alt=""></div>
       <div><div class="brand-name">Uppr</div><p class="subtitle">Infrastructure workspace</p></div>
     </div>
     {{if .ActiveRepo}}
