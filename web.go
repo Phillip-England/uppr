@@ -258,6 +258,10 @@ type credentialsPage struct {
 	Error      string
 }
 
+type backupPage struct {
+	Root, BasePath, ActiveRepo, Message, Error string
+}
+
 type envField struct {
 	Key         string
 	Value       string
@@ -299,6 +303,9 @@ func (app *webApp) routes() http.Handler {
 	mux.HandleFunc("/launch/shell", app.handleLaunchShell)
 	mux.HandleFunc("/issues", app.handleIssues)
 	mux.HandleFunc("/credentials", app.handleCredentials)
+	mux.HandleFunc("/backup", app.handleBackup)
+	mux.HandleFunc("/backup/download", app.handleBackupDownload)
+	mux.HandleFunc("/backup/restore", app.handleBackupRestore)
 	return securityHeaders(app.requireAuth(mux))
 }
 
@@ -431,6 +438,9 @@ func (app *webApp) workspaceRoutes() http.Handler {
 	mux.HandleFunc("/launch/shell", app.handleLaunchShell)
 	mux.HandleFunc("/issues", app.handleIssues)
 	mux.HandleFunc("/credentials", app.handleCredentials)
+	mux.HandleFunc("/backup", app.handleBackup)
+	mux.HandleFunc("/backup/download", app.handleBackupDownload)
+	mux.HandleFunc("/backup/restore", app.handleBackupRestore)
 	return mux
 }
 
@@ -1096,6 +1106,98 @@ func (app *webApp) renderCredentials(w http.ResponseWriter, page credentialsPage
 		}
 	}
 	if err := credentialsTemplate.Execute(w, page); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+func (app *webApp) handleBackup(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/backup" {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	page := backupPage{Root: app.root, BasePath: app.basePath, Message: r.URL.Query().Get("message")}
+	if err := backupTemplate.Execute(w, page); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+func (app *webApp) handleBackupDownload(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	tmp, err := os.CreateTemp("", "uppr-backup-*.tar.gz")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	artifact := tmp.Name()
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(artifact)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer os.Remove(artifact)
+	if err := backupState([]string{artifact, app.root}); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/gzip")
+	w.Header().Set("Content-Disposition", `attachment; filename="uppr-state.tar.gz"`)
+	http.ServeFile(w, r, artifact)
+}
+
+func (app *webApp) handleBackupRestore(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Redirect(w, r, app.routePath("/backup"), http.StatusSeeOther)
+		return
+	}
+	if err := r.ParseMultipartForm(128 << 20); err != nil {
+		app.renderBackup(w, backupPage{Error: err.Error()})
+		return
+	}
+	file, header, err := r.FormFile("backup")
+	if err != nil {
+		app.renderBackup(w, backupPage{Error: "choose an uppr backup archive to restore"})
+		return
+	}
+	defer file.Close()
+	if header.Size == 0 {
+		app.renderBackup(w, backupPage{Error: "backup archive is empty"})
+		return
+	}
+	tmp, err := os.CreateTemp("", "uppr-restore-upload-*.tar.gz")
+	if err != nil {
+		app.renderBackup(w, backupPage{Error: err.Error()})
+		return
+	}
+	artifact := tmp.Name()
+	defer os.Remove(artifact)
+	_, copyErr := io.Copy(tmp, file)
+	closeErr := tmp.Close()
+	if copyErr != nil {
+		app.renderBackup(w, backupPage{Error: copyErr.Error()})
+		return
+	}
+	if closeErr != nil {
+		app.renderBackup(w, backupPage{Error: closeErr.Error()})
+		return
+	}
+	if err := restoreState([]string{artifact, app.root}); err != nil {
+		app.renderBackup(w, backupPage{Error: err.Error()})
+		return
+	}
+	http.Redirect(w, r, app.routePath("/backup?message=backup+restored"), http.StatusSeeOther)
+}
+
+func (app *webApp) renderBackup(w http.ResponseWriter, page backupPage) {
+	page.Root = app.root
+	page.BasePath = app.basePath
+	if err := backupTemplate.Execute(w, page); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
@@ -1861,6 +1963,8 @@ var webFuncs = template.FuncMap{
 			return "Workspace created."
 		case "workspace deleted":
 			return "Workspace deleted."
+		case "backup restored":
+			return "Backup restored."
 		default:
 			return message
 		}
@@ -1950,6 +2054,7 @@ var terminalTemplate = template.Must(template.New("terminal").Funcs(webFuncs).Pa
 var launchTemplate = template.Must(template.New("launch").Funcs(webFuncs).Parse(pageChrome(launchBody + terminalAssets)))
 var issuesTemplate = template.Must(template.New("issues").Funcs(webFuncs).Parse(pageChrome(issuesBody)))
 var credentialsTemplate = template.Must(template.New("credentials").Funcs(webFuncs).Parse(pageChrome(credentialsBody)))
+var backupTemplate = template.Must(template.New("backup").Funcs(webFuncs).Parse(pageChrome(backupBody)))
 
 func pageChrome(body string) string {
 	return `<!doctype html>
@@ -2255,6 +2360,7 @@ body.drawer-open .drawer { transform:translateX(0); }
     <a href="{{.BasePath}}/sync" data-nav-link data-mobile-close><span class="nav-icon">&lt;&gt;</span>Sync</a>
     <a href="{{.BasePath}}/launch" data-nav-link data-mobile-close><span class="nav-icon">&gt;</span>Launch</a>
     <a href="{{.BasePath}}/issues" data-nav-link data-mobile-close><span class="nav-icon">!</span>Issues</a>
+    <a href="{{.BasePath}}/backup" data-nav-link data-mobile-close><span class="nav-icon">^v</span>Backup</a>
   </nav>
 </div>
 <div class="app-layout">
@@ -2279,6 +2385,7 @@ body.drawer-open .drawer { transform:translateX(0); }
       <a href="{{.BasePath}}/sync" data-nav-link><span class="nav-icon">&lt;&gt;</span>Sync</a>
       <a href="{{.BasePath}}/launch" data-nav-link><span class="nav-icon">&gt;</span>Launch</a>
       <a href="{{.BasePath}}/issues" data-nav-link><span class="nav-icon">!</span>Issues</a>
+      <a href="{{.BasePath}}/backup" data-nav-link><span class="nav-icon">^v</span>Backup</a>
     </nav>
     <div class="sidebar-footer">
       <button class="button theme-toggle" type="button" data-theme-toggle aria-pressed="false">Dark Mode</button>
@@ -2841,6 +2948,41 @@ const credentialsBody = `
     <p class="muted">The .env file must not be committed.</p>
   </div>
 </details>
+`
+
+const backupBody = `
+<header class="page-header">
+  <div>
+    <h1>Backup and restore</h1>
+    <p class="page-description">Export this runtime root as a portable archive, or restore an archive into the current root.</p>
+  </div>
+</header>
+
+<section class="panel technical-details" aria-labelledby="backup-root-heading">
+  <div class="section-heading"><div><h2 id="backup-root-heading">Runtime root</h2><p>The archive is created from or restored into this directory.</p></div></div>
+  <div class="project-root-bar">
+    <code class="project-root mono">{{.Root}}</code>
+    <button class="button button--small" type="button" data-copy="{{.Root}}" data-label="Copy" title="Copy runtime root.">Copy</button>
+  </div>
+</section>
+
+<section class="panel technical-details" aria-labelledby="backup-download-heading">
+  <div class="section-heading"><div><h2 id="backup-download-heading">Download state</h2><p>Includes configuration, runtime data, app repositories, and registered workspaces when this is a server root.</p></div></div>
+  <a class="button button--primary" href="{{.BasePath}}/backup/download">Download backup</a>
+</section>
+
+<section class="panel technical-details danger-panel" aria-labelledby="backup-restore-heading">
+  <div class="section-heading"><div><h2 id="backup-restore-heading">Restore state</h2><p>Existing files with matching names are overwritten. Unrelated files are left in place.</p></div></div>
+  <form method="post" action="{{.BasePath}}/backup/restore" enctype="multipart/form-data" data-loading-label="Restoring...">
+    <div class="field">
+      <label for="backup">Backup archive</label>
+      <input id="backup" name="backup" type="file" accept=".tar.gz,application/gzip,application/x-gzip" required>
+    </div>
+    <div class="form-actions" style="margin-top:14px">
+      <button class="button button--danger" type="submit" data-default-label="Restore backup">Restore backup</button>
+    </div>
+  </form>
+</section>
 `
 
 const fileBody = `

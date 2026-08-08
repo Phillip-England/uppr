@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"errors"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -301,6 +302,47 @@ func TestBackupAndRestoreProject(t *testing.T) {
 	destination := t.TempDir()
 	if err := restoreState([]string{artifact, destination}); err != nil {
 		t.Fatal(err)
+	}
+	if got := readTestFile(t, filepath.Join(destination, "apps", "api", "config", ".env")); got != "TOKEN=secret\n" {
+		t.Fatalf("restored env = %q", got)
+	}
+	if got := readTestFile(t, filepath.Join(destination, "apps", "api", "data", "main.sqlite")); got != "database" {
+		t.Fatalf("restored database = %q", got)
+	}
+}
+
+func TestWebBackupDownloadAndRestoreUploadMigratesProject(t *testing.T) {
+	source := newTestProject(t)
+	appRoot := filepath.Join(source, "apps", "api")
+	if err := os.MkdirAll(filepath.Join(appRoot, "config"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(appRoot, "data"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(appRoot, "config", ".env"), []byte("TOKEN=secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(appRoot, "data", "main.sqlite"), []byte("database"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeTestRepos(t, source, []Repo{{Name: "api", URL: "https://github.com/acme/api", Path: "apps/api"}})
+
+	download := getWeb(t, &webApp{root: source}, "/backup/download")
+	if download.Code != http.StatusOK {
+		t.Fatalf("download status = %d, body = %s", download.Code, download.Body.String())
+	}
+	if got := download.Header().Get("Content-Disposition"); !strings.Contains(got, "uppr-state.tar.gz") {
+		t.Fatalf("content disposition = %q", got)
+	}
+
+	destination := newTestProject(t)
+	restore := postWebMultipartFile(t, &webApp{root: destination}, "/backup/restore", "backup", "uppr-state.tar.gz", download.Body.Bytes())
+	if restore.Code != http.StatusSeeOther {
+		t.Fatalf("restore status = %d, body = %s", restore.Code, restore.Body.String())
+	}
+	if location := restore.Header().Get("Location"); location != "/backup?message=backup+restored" {
+		t.Fatalf("location = %q", location)
 	}
 	if got := readTestFile(t, filepath.Join(destination, "apps", "api", "config", ".env")); got != "TOKEN=secret\n" {
 		t.Fatalf("restored env = %q", got)
@@ -1877,6 +1919,27 @@ func postWebForm(t *testing.T, app *webApp, target string, form url.Values) *htt
 	t.Helper()
 	request := httptest.NewRequest(http.MethodPost, target, strings.NewReader(form.Encode()))
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	response := httptest.NewRecorder()
+	app.routes().ServeHTTP(response, request)
+	return response
+}
+
+func postWebMultipartFile(t *testing.T, app *webApp, target, field, filename string, contents []byte) *httptest.ResponseRecorder {
+	t.Helper()
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile(field, filename)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := part.Write(contents); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, target, &body)
+	request.Header.Set("Content-Type", writer.FormDataContentType())
 	response := httptest.NewRecorder()
 	app.routes().ServeHTTP(response, request)
 	return response
