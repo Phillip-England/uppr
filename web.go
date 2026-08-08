@@ -1119,7 +1119,10 @@ func (app *webApp) handleBackup(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	page := backupPage{Root: app.root, BasePath: app.basePath, Message: r.URL.Query().Get("message")}
+	page := backupPage{
+		Root: app.root, BasePath: app.basePath,
+		Message: r.URL.Query().Get("message"),
+	}
 	if err := backupTemplate.Execute(w, page); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}

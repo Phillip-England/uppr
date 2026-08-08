@@ -199,6 +199,16 @@ uppr web .
 Open Backup, upload the `uppr-state.tar.gz` archive, then open Launch to
 rebuild and start the restored environment.
 
+When both directories are on the same host, the Backup page also provides
+**Migrate runtime assets**. Enter the absolute path of a destination created
+with `uppr init`; Uppr copies the backup directly, leaves the source untouched,
+and shows the cutover command:
+
+```sh
+cd /path/to/new-runtime
+uppr service .
+```
+
 For server roots, the backup includes `workspaces.conf` and registered
 workspace directories. On restore, workspace paths are rewritten under
 the destination runtime's `data/workspaces/` directory. The restored

@@ -248,6 +248,165 @@ func restoreState(args []string) error {
 	return nil
 }
 
+// migrateState makes a portable copy of one initialized runtime in another.
+// It intentionally leaves the source untouched so switching the service to the
+// destination can be verified before the old runtime is retired.
+func migrateState(source, destination string) (string, error) {
+	absSource, err := filepath.Abs(source)
+	if err != nil {
+		return "", err
+	}
+	absDestination, err := filepath.Abs(strings.TrimSpace(destination))
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(destination) == "" {
+		return "", errors.New("enter the initialized destination directory")
+	}
+	if pathsOverlap(absSource, absDestination) {
+		return "", errors.New("destination must be separate from and outside the current runtime root")
+	}
+	if _, err := os.Stat(filepath.Join(absDestination, envFile)); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", fmt.Errorf("%s is not initialized; run `uppr init %q` first", absDestination, absDestination)
+		}
+		return "", err
+	}
+	if !fileExists(filepath.Join(absDestination, reposFile)) && !fileExists(filepath.Join(absDestination, workspacesFile)) {
+		return "", fmt.Errorf("%s is not an initialized uppr runtime", absDestination)
+	}
+	staging, err := os.MkdirTemp("", "uppr-migrate-runtime-*")
+	if err != nil {
+		return "", err
+	}
+	defer os.RemoveAll(staging)
+	if err := stageRuntimeAssets(absSource, staging); err != nil {
+		return "", err
+	}
+
+	tmp, err := os.CreateTemp("", "uppr-migrate-*.tar.gz")
+	if err != nil {
+		return "", err
+	}
+	artifact := tmp.Name()
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(artifact)
+		return "", err
+	}
+	defer os.Remove(artifact)
+	if err := backupState([]string{artifact, staging}); err != nil {
+		return "", err
+	}
+	if err := restoreState([]string{artifact, absDestination}); err != nil {
+		return "", err
+	}
+	return absDestination, nil
+}
+
+func migrateRuntime(args []string) error {
+	if len(args) != 2 {
+		return errors.New("usage: uppr migrate <source> <destination>")
+	}
+	migratedRoot, err := migrateState(args[0], args[1])
+	if err != nil {
+		if errors.Is(err, os.ErrPermission) {
+			return fmt.Errorf("migrate runtime: %w (run as a user with access to both directories; if necessary, use `sudo uppr migrate %q %q`)", err, args[0], args[1])
+		}
+		return err
+	}
+	fmt.Printf("migrated runtime assets into %s; source left unchanged\n", migratedRoot)
+	return nil
+}
+
+// stageRuntimeAssets deliberately excludes Uppr's own source tree. Configured
+// application repositories and server workspaces are copied separately by the
+// normal backup machinery.
+func stageRuntimeAssets(source, staging string) error {
+	entries := []string{
+		"config", "data", reposFile, workspacesFile, caddyFile, dockerComposeFile,
+		makeFile, caddyDockerFile,
+	}
+	for _, entry := range entries {
+		from := filepath.Join(source, entry)
+		if _, err := os.Lstat(from); errors.Is(err, os.ErrNotExist) {
+			continue
+		} else if err != nil {
+			return err
+		}
+		if err := copyTreeEntry(from, filepath.Join(staging, entry)); err != nil {
+			return err
+		}
+	}
+	if fileExists(filepath.Join(source, workspacesFile)) {
+		return nil
+	}
+	repos, err := readRepos(filepath.Join(source, reposFile))
+	if err != nil {
+		return err
+	}
+	for _, repo := range repos {
+		repoPath := repo.Path
+		if repoPath == "" {
+			repoPath = defaultRepoPath(repo)
+		}
+		if filepath.IsAbs(repoPath) {
+			return fmt.Errorf("repository %q uses absolute path %s; change it to a runtime-relative path before migrating", repoLabel(repo), repoPath)
+		}
+		clean := filepath.Clean(repoPath)
+		if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+			return fmt.Errorf("repository %q path escapes the runtime root", repoLabel(repo))
+		}
+		from := filepath.Join(source, clean)
+		if _, err := os.Lstat(from); errors.Is(err, os.ErrNotExist) {
+			continue
+		} else if err != nil {
+			return err
+		}
+		if err := copyTreeEntry(from, filepath.Join(staging, clean)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func copyTreeEntry(source, destination string) error {
+	info, err := os.Lstat(source)
+	if err != nil {
+		return err
+	}
+	if info.IsDir() {
+		return copyTree(source, destination)
+	}
+	if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
+		return err
+	}
+	in, err := os.Open(source)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(destination, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, info.Mode().Perm())
+	if err != nil {
+		return err
+	}
+	_, copyErr := io.Copy(out, in)
+	closeErr := out.Close()
+	if copyErr != nil {
+		return copyErr
+	}
+	return closeErr
+}
+
+func pathsOverlap(a, b string) bool {
+	for _, pair := range [][2]string{{a, b}, {b, a}} {
+		rel, err := filepath.Rel(pair[0], pair[1])
+		if err == nil && (rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))) {
+			return true
+		}
+	}
+	return false
+}
+
 func extractBackup(artifact, destination string) (backupManifest, error) {
 	f, err := os.Open(artifact)
 	if err != nil {
@@ -290,7 +449,15 @@ func extractBackup(artifact, destination string) (backupManifest, error) {
 		case tar.TypeReg, tar.TypeRegA:
 			if err = os.MkdirAll(filepath.Dir(target), 0o755); err == nil {
 				var out *os.File
-				out, err = os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, os.FileMode(header.Mode))
+				// Replace rather than truncate. Git pack files are commonly 0444,
+				// and a second restore must still be able to update them when the
+				// destination directory is owned by the current user. Removing the
+				// entry first also avoids following an existing destination symlink.
+				if removeErr := os.Remove(target); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+					err = removeErr
+				} else {
+					out, err = os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, os.FileMode(header.Mode))
+				}
 				if err == nil {
 					_, err = io.Copy(out, tr)
 					closeErr := out.Close()
@@ -318,6 +485,9 @@ func extractBackup(artifact, destination string) (backupManifest, error) {
 	}
 	for _, symlink := range symlinks {
 		if err := os.MkdirAll(filepath.Dir(symlink.target), 0o755); err != nil {
+			return manifest, err
+		}
+		if err := os.Remove(symlink.target); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return manifest, err
 		}
 		if err := os.Symlink(symlink.link, symlink.target); err != nil {
@@ -367,7 +537,15 @@ func copyTree(source, destination string) error {
 		if err != nil {
 			return err
 		}
-		out, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, info.Mode().Perm())
+		// Restore may be repeated over an existing Git checkout. Git pack files
+		// are normally read-only, but their containing directory is writable, so
+		// replace the directory entry instead of trying to truncate the file.
+		// This also prevents an existing target symlink from being followed.
+		if err := os.Remove(target); err != nil && !errors.Is(err, os.ErrNotExist) {
+			in.Close()
+			return err
+		}
+		out, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, info.Mode().Perm())
 		if err != nil {
 			in.Close()
 			return err

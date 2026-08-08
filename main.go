@@ -97,6 +97,8 @@ func runWithServe(args []string, serve func([]string) error) error {
 		return backupState(args[1:])
 	case "restore":
 		return restoreState(args[1:])
+	case "migrate":
+		return migrateRuntime(args[1:])
 	case "generate-server":
 		root := "."
 		if len(args) > 2 {
@@ -152,6 +154,7 @@ Usage:
   uppr dump [path]                write UPPR.md integration instructions for an AI agent
   uppr backup <file> [path]       export apps, configuration, and data to a .tar.gz artifact
   uppr restore <file> [path]      restore an artifact into a project or server root
+  uppr migrate <source> <dest>    copy runtime assets into an initialized directory
   uppr generate-server [path]     write master Caddy/Compose/Make files
   uppr launch [path]              rebuild and launch the managed app containers
   uppr install-caddyx [path]      build Caddy with rate limiting (default ~/.local/bin/caddyx)

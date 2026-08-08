@@ -352,6 +352,85 @@ func TestWebBackupDownloadAndRestoreUploadMigratesProject(t *testing.T) {
 	}
 }
 
+func TestMigrateCommandCopiesRuntimeToInitializedDirectory(t *testing.T) {
+	source := newTestProject(t)
+	appRoot := filepath.Join(source, "apps", "api")
+	if err := os.MkdirAll(filepath.Join(appRoot, "config"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(appRoot, "config", ".env"), []byte("TOKEN=secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "main.go"), []byte("package main\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeTestRepos(t, source, []Repo{{Name: "api", URL: "https://github.com/acme/api", Path: "apps/api"}})
+	destination := newTestProject(t)
+
+	if err := runWithServe([]string{"migrate", source, destination}, func([]string) error {
+		t.Fatal("migrate must not start the server")
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := readTestFile(t, filepath.Join(destination, "apps", "api", "config", ".env")); got != "TOKEN=secret\n" {
+		t.Fatalf("migrated env = %q", got)
+	}
+	if got := readTestFile(t, filepath.Join(source, "apps", "api", "config", ".env")); got != "TOKEN=secret\n" {
+		t.Fatalf("source env changed = %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(destination, "main.go")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Uppr source code must not be migrated; stat err = %v", err)
+	}
+}
+
+func TestMigrateCommandReplacesReadOnlyDestinationFiles(t *testing.T) {
+	source := newTestProject(t)
+	appRoot := filepath.Join(source, "apps", "api")
+	if err := os.MkdirAll(appRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	pack := filepath.Join(appRoot, "read-only.pack")
+	if err := os.WriteFile(pack, []byte("first"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	writeTestRepos(t, source, []Repo{{Name: "api", URL: "https://github.com/acme/api", Path: "apps/api"}})
+	destination := newTestProject(t)
+
+	if _, err := migrateState(source, destination); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(pack, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(pack, []byte("second"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := migrateState(source, destination); err != nil {
+		t.Fatal(err)
+	}
+	if got := readTestFile(t, filepath.Join(destination, "apps", "api", "read-only.pack")); got != "second" {
+		t.Fatalf("migrated read-only file = %q", got)
+	}
+}
+
+func TestMigrateCommandRequiresInitializedSeparateDestination(t *testing.T) {
+	source := newTestProject(t)
+	for _, destination := range []string{filepath.Join(source, "nested"), t.TempDir()} {
+		if err := runWithServe([]string{"migrate", source, destination}, func([]string) error { return nil }); err == nil {
+			t.Fatalf("destination %q: expected an error", destination)
+		}
+	}
+}
+
+func TestMigrateCommandRequiresSourceAndDestination(t *testing.T) {
+	for _, args := range [][]string{{"migrate"}, {"migrate", "."}, {"migrate", ".", "../new", "extra"}} {
+		if err := runWithServe(args, func([]string) error { return nil }); err == nil || err.Error() != "usage: uppr migrate <source> <destination>" {
+			t.Fatalf("args %q: error = %v", args, err)
+		}
+	}
+}
+
 func TestBackupAndRestoreServerRelocatesWorkspaces(t *testing.T) {
 	server := newTestProject(t)
 	oldWorkspaceRoot := filepath.Join(t.TempDir(), "old-workspaces")
@@ -1758,6 +1837,7 @@ func TestGenerateServerFilesBuildsSingleRootCompose(t *testing.T) {
 
 	masterCompose := readTestFile(t, filepath.Join(root, dockerComposeFile))
 	for _, want := range []string{
+		"name: uppr",
 		"services:",
 		"  ops-api:",
 		strconv.Quote(filepath.ToSlash(filepath.Join(workspace.Path, "apps", "api"))),
@@ -1810,8 +1890,24 @@ func TestServerServicesAssignDistinctLoopbackPorts(t *testing.T) {
 }
 
 func TestEmptyServerComposeIsValidMapping(t *testing.T) {
-	if got := renderServerDockerCompose(t.TempDir(), nil); !strings.Contains(got, "services: {}") {
+	if got := renderServerDockerCompose(t.TempDir(), nil); !strings.Contains(got, "name: uppr\nservices: {}") {
 		t.Fatalf("empty compose = %q", got)
+	}
+}
+
+func TestServerComposeUsesStableProjectNameAfterRuntimeMove(t *testing.T) {
+	service := serverService{
+		Root:      "/srv/workspaces/ops",
+		Workspace: Workspace{Name: "ops"},
+		Repo:      Repo{Name: "api", Path: "api", Port: 3000},
+		Service:   "ops-api",
+		HostPort:  8218,
+	}
+	for _, root := range []string{"/srv/uppr", "/srv/uppr-workspace"} {
+		compose := renderServerDockerCompose(root, []serverService{service})
+		if !strings.Contains(compose, "name: uppr\n") {
+			t.Fatalf("compose for %s lacks stable project identity:\n%s", root, compose)
+		}
 	}
 }
 

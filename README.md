@@ -209,6 +209,19 @@ paths, so the restored server does not depend on the old runtime directory. Run
 `uppr launch` after restoring to rebuild and start the applications, or run
 `uppr service` there to make that runtime the systemd-managed server.
 
+For a same-machine move, initialize a separate destination and migrate directly
+from the CLI:
+
+```sh
+./uppr init ../new-dir
+./uppr migrate . ../new-dir
+```
+
+Run this as the user that should own the files. If the destination requires
+administrator access, use `sudo` for the migration and then repair ownership,
+for example `sudo chown -R -- uppr-user:uppr-user ../new-dir`. Migration is a
+CLI-only operation; the source directory is left unchanged.
+
 ## Manage repos
 
 ```sh
@@ -366,6 +379,11 @@ You can generate the root runtime files without launching Docker with:
 The root Docker Compose file directly defines the Caddy service and every app
 service from every workspace. Workspaces do not need their own compose files for
 server launch.
+
+The generated server Compose file fixes the project name to `uppr`, rather than
+deriving it from the runtime directory. This keeps container identity stable
+across a same-machine runtime migration and prevents the old and new directory
+names from producing competing stacks on the same published ports.
 
 ## Push repos
 

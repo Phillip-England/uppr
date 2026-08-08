@@ -44,6 +44,11 @@ systemd services to the new directory. Only one pair of system-wide
 `uppr.service` and `caddy.service` units is installed, so the most recent
 successful `uppr service` selects the active runtime.
 
+The generated application Compose file uses the stable project name `uppr`.
+Docker Compose therefore continues managing the same containers when the
+runtime directory is moved instead of creating a directory-named second stack
+that collides with the existing stack's published ports.
+
 The service command also records the absolute path of the installed `uppr`
 executable. If that executable is later moved or reinstalled at a different
 path, run `uppr service` again.
@@ -87,11 +92,30 @@ credentials and application data.
 
 ## Migration workflow
 
-On the old runtime, open the authenticated web portal's Backup page and
-download `uppr-state.tar.gz`. For consistent databases, quiesce writing apps
-before taking that backup.
+For a same-machine migration, initialize the destination and run the migration
+from the shell. For consistent databases, quiesce writing apps first.
 
-On the destination machine, or elsewhere on the same machine:
+```sh
+uppr init ../new-server
+uppr migrate . ../new-server
+```
+
+Run the command as the account that should own and operate the destination.
+If its parent directory requires administrator access, use
+`sudo uppr migrate . ../new-server`, then assign the result to the service
+account before operating it without sudo:
+
+```sh
+sudo chown -R -- uppr-user:uppr-user ../new-server
+```
+
+Replace `uppr-user:uppr-user` with the intended user and group. `chown -R`
+changes the directory and every child. The source runtime remains unchanged.
+
+For a migration to another machine, open the old runtime's authenticated web
+portal Backup page and download `uppr-state.tar.gz`.
+
+On the destination machine:
 
 ```sh
 uppr init ./new-server
