@@ -3,6 +3,10 @@
 `uppr` manages workspaces of git repositories and generates Docker/Caddy launch
 files for them.
 
+For the plain-English mental model—including runtime directories, systemd,
+state ownership, and the complete migration flow—read
+[`HOW_UPPR_WORKS.md`](HOW_UPPR_WORKS.md).
+
 ## Setup
 
 ```sh
@@ -103,8 +107,14 @@ start both units:
 
 ```sh
 ./uppr install-caddyx
-./reload.sh
+./uppr service .
 ```
+
+Run `uppr service [path]` whenever the service definitions or executable path
+change. It updates both `/etc/systemd/system/uppr.service` and
+`/etc/systemd/system/caddy.service`, reloads systemd, enables both units, and
+restarts them. The more comprehensive `reload.sh` remains available when you
+also want to repair ownership and pull every registered workspace first.
 
 Run `reload.sh` as the ordinary account that installed and will operate Uppr;
 do not run the whole script with `sudo`. It uses `sudo` only to repair ownership
@@ -193,9 +203,11 @@ Restore it on the same machine or copy it to another one:
 
 An optional final path selects another root. Existing files with the same names
 are overwritten; unrelated files are retained. Server workspaces are restored
-beneath the destination machine's `UPPR_WORKSPACES_DIR` (or platform default),
-and `workspaces.conf` is rewritten with those portable paths. Run `uppr launch`
-after restoring to rebuild and start the applications.
+beneath the destination runtime's `data/workspaces/` directory.
+`UPPR_WORKSPACES_DIR` and `workspaces.conf` are rewritten to those portable
+paths, so the restored server does not depend on the old runtime directory. Run
+`uppr launch` after restoring to rebuild and start the applications, or run
+`uppr service` there to make that runtime the systemd-managed server.
 
 ## Manage repos
 

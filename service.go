@@ -11,6 +11,81 @@ import (
 	"strings"
 )
 
+var systemdUnitDir = "/etc/systemd/system"
+
+func updateSystemServices(args []string) error {
+	root, err := serviceRoot(args, "usage: uppr service [path]")
+	if err != nil {
+		return err
+	}
+	if err := bootstrapServiceRoot(root); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Join(root, "data", "caddy"), 0o755); err != nil {
+		return err
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	executable, _ = filepath.Abs(executable)
+	caddy, err := findCaddyx()
+	if err != nil {
+		return err
+	}
+	account, err := currentServiceAccount()
+	if err != nil {
+		return err
+	}
+
+	units := map[string]string{
+		"uppr.service":  renderUpprSystemdService(root, executable, account),
+		"caddy.service": renderCaddySystemdService(root, executable, caddy, account),
+	}
+	stagingDir, err := os.MkdirTemp("", "uppr-services-")
+	if err != nil {
+		return fmt.Errorf("create service staging directory: %w", err)
+	}
+	defer os.RemoveAll(stagingDir)
+	for name, contents := range units {
+		if err := os.WriteFile(filepath.Join(stagingDir, name), []byte(contents), 0o644); err != nil {
+			return fmt.Errorf("stage %s: %w", name, err)
+		}
+	}
+
+	runPrivileged := func(name string, args ...string) error {
+		command := name
+		commandArgs := args
+		if os.Geteuid() != 0 {
+			command = "sudo"
+			commandArgs = append([]string{name}, args...)
+		}
+		cmd := exec.Command(command, commandArgs...)
+		cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("run %s: %w", strings.Join(append([]string{name}, args...), " "), err)
+		}
+		return nil
+	}
+
+	for _, name := range []string{"uppr.service", "caddy.service"} {
+		if err := runPrivileged("install", "-o", "root", "-g", "root", "-m", "0644", filepath.Join(stagingDir, name), filepath.Join(systemdUnitDir, name)); err != nil {
+			return err
+		}
+	}
+	if err := runPrivileged("systemctl", "daemon-reload"); err != nil {
+		return err
+	}
+	if err := runPrivileged("systemctl", "enable", "uppr.service", "caddy.service"); err != nil {
+		return err
+	}
+	if err := runPrivileged("systemctl", "restart", "uppr.service", "caddy.service"); err != nil {
+		return err
+	}
+	fmt.Printf("updated and restarted %s and %s\n", filepath.Join(systemdUnitDir, "uppr.service"), filepath.Join(systemdUnitDir, "caddy.service"))
+	return nil
+}
+
 func printUpprService(args []string) error {
 	root, err := serviceRoot(args, "usage: uppr service-uppr [path]")
 	if err != nil {

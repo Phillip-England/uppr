@@ -213,8 +213,15 @@ func restoreState(args []string) error {
 		if err := copyTree(filepath.Join(staging, "server"), absRoot); err != nil {
 			return err
 		}
-		workspaceRoot, err := defaultWorkspacesRoot()
-		if err != nil {
+		// A server backup may contain an absolute UPPR_WORKSPACES_DIR from the
+		// source machine. Keeping it would make a restored runtime depend on the
+		// old directory (and can even write restored state back into it during a
+		// same-machine migration). Server restores are therefore self-contained:
+		// their workspace directory moves with the destination runtime root.
+		workspaceRoot := filepath.Join(absRoot, "data", workspacesDir)
+		if err := writeDotEnvValues(filepath.Join(absRoot, envFile), []string{workspacesDirEnv}, map[string]string{
+			workspacesDirEnv: workspaceRoot,
+		}); err != nil {
 			return err
 		}
 		var restored []Workspace

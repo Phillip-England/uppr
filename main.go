@@ -114,7 +114,9 @@ func runWithServe(args []string, serve func([]string) error) error {
 		return launchServer(args[1:])
 	case "install-caddyx":
 		return installCaddyx(args[1:])
-	case "service", "service-uppr":
+	case "service":
+		return updateSystemServices(args[1:])
+	case "service-uppr":
 		return printUpprService(args[1:])
 	case "service-caddy":
 		return printCaddyService(args[1:])
@@ -153,9 +155,9 @@ Usage:
   uppr generate-server [path]     write master Caddy/Compose/Make files
   uppr launch [path]              rebuild and launch the managed app containers
   uppr install-caddyx [path]      build Caddy with rate limiting (default ~/.local/bin/caddyx)
-  uppr service-uppr [path]        print a native systemd unit for Uppr
-  uppr service-caddy [path]       print a native systemd unit for Caddy
-  uppr service [path]             alias for service-uppr
+  uppr service [path]             install/update and restart all systemd units
+  uppr service-uppr [path]        print the native Uppr systemd unit
+  uppr service-caddy [path]       print the native Caddy systemd unit
   uppr web [path]                 open a browser UI for an uppr project
   uppr serve [path]               serve authenticated web UI for deployment
   uppr <path>                     shorthand for uppr web <path>

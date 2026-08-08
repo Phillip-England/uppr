@@ -33,6 +33,17 @@ www.phillip-england.com, phillip-england.com {
 	reverse_proxy 127.0.0.1:8112
 }
 
+artif4ct.com {
+	rate_limit {
+		zone dynamic {
+			key {remote_host}
+			events 100
+			window 1m
+		}
+	}
+	reverse_proxy 127.0.0.1:8217
+}
+
 receiptupload.online, www.receiptupload.online {
 	rate_limit {
 		zone dynamic {
@@ -42,4 +53,26 @@ receiptupload.online, www.receiptupload.online {
 		}
 	}
 	reverse_proxy 127.0.0.1:8725
+}
+
+hr.cfasuite.com {
+	rate_limit {
+		zone dynamic {
+			key {remote_host}
+			events 100
+			window 1m
+		}
+	}
+	reverse_proxy 127.0.0.1:8218
+}
+
+cmerge.phillip-england.com {
+	rate_limit {
+		zone dynamic {
+			key {remote_host}
+			events 100
+			window 1m
+		}
+	}
+	reverse_proxy 127.0.0.1:39217
 }

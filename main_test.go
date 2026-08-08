@@ -354,6 +354,12 @@ func TestWebBackupDownloadAndRestoreUploadMigratesProject(t *testing.T) {
 
 func TestBackupAndRestoreServerRelocatesWorkspaces(t *testing.T) {
 	server := newTestProject(t)
+	oldWorkspaceRoot := filepath.Join(t.TempDir(), "old-workspaces")
+	if err := writeDotEnvValues(filepath.Join(server, envFile), []string{workspacesDirEnv}, map[string]string{
+		workspacesDirEnv: oldWorkspaceRoot,
+	}); err != nil {
+		t.Fatal(err)
+	}
 	workspace := filepath.Join(t.TempDir(), "source-workspace")
 	if err := os.MkdirAll(filepath.Join(workspace, "apps", "api", "data"), 0o755); err != nil {
 		t.Fatal(err)
@@ -373,8 +379,6 @@ func TestBackupAndRestoreServerRelocatesWorkspaces(t *testing.T) {
 		t.Fatal(err)
 	}
 	destination := t.TempDir()
-	workspaceRoot := filepath.Join(t.TempDir(), "relocated")
-	t.Setenv(workspacesDirEnv, workspaceRoot)
 	if err := restoreState([]string{artifact, destination}); err != nil {
 		t.Fatal(err)
 	}
@@ -382,12 +386,20 @@ func TestBackupAndRestoreServerRelocatesWorkspaces(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantPath := filepath.Join(workspaceRoot, "production")
+	wantWorkspaceRoot := filepath.Join(destination, "data", workspacesDir)
+	wantPath := filepath.Join(wantWorkspaceRoot, "production")
 	if len(restored) != 1 || restored[0].Path != wantPath {
 		t.Fatalf("restored workspaces = %#v, want path %q", restored, wantPath)
 	}
 	if got := readTestFile(t, filepath.Join(wantPath, "apps", "api", "data", "main.sqlite")); got != "state" {
 		t.Fatalf("restored workspace database = %q", got)
+	}
+	values, err := readDotEnv(filepath.Join(destination, envFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if values[workspacesDirEnv] != wantWorkspaceRoot {
+		t.Fatalf("%s = %q, want %q", workspacesDirEnv, values[workspacesDirEnv], wantWorkspaceRoot)
 	}
 }
 

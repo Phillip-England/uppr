@@ -201,8 +201,9 @@ rebuild and start the restored environment.
 
 For server roots, the backup includes `workspaces.conf` and registered
 workspace directories. On restore, workspace paths are rewritten under
-`UPPR_WORKSPACES_DIR` or the platform default workspace location for the new
-machine.
+the destination runtime's `data/workspaces/` directory. The restored
+`UPPR_WORKSPACES_DIR` is rewritten as well, so it cannot continue pointing at
+the old machine or old runtime directory.
 
 ## Bottom line
 
