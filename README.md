@@ -113,15 +113,11 @@ start both units:
 Run `uppr service [path]` whenever the service definitions or executable path
 change. It updates both `/etc/systemd/system/uppr.service` and
 `/etc/systemd/system/caddy.service`, reloads systemd, enables both units, and
-restarts them. The more comprehensive `reload.sh` remains available when you
-also want to repair ownership and pull every registered workspace first.
-
-Run `reload.sh` as the ordinary account that installed and will operate Uppr;
-do not run the whole script with `sudo`. It uses `sudo` only to repair ownership
-of this installation, install the root-owned systemd unit files, and control the
-services. Both services themselves run as that ordinary user, so generated
-files remain editable without `sudo`. That user must have access to Docker
-(normally through membership in the `docker` group).
+restarts them. Run it as the ordinary account that installed and will operate
+Uppr; the command requests `sudo` only when installing the root-owned systemd
+unit files and controlling the services. Both services themselves run as that
+ordinary user, so generated files remain editable without `sudo`. That user
+must have access to Docker (normally through membership in the `docker` group).
 
 `install-caddyx` writes `~/.local/bin/caddyx` by default; pass a destination
 path to override it. `service-caddy` finds that location, searches `PATH`, or
@@ -131,16 +127,6 @@ uses `CADDYX_PATH`. The service commands create `config/.env`, `data/`, and
 generated automatically. Set `UPPR_DOMAINS` to one or more comma-separated
 Caddy hostnames.
 
-`reload.sh` pulls every repository in every registered workspace, regenerates
-and validates the Caddy configuration, atomically rewrites `/etc/systemd/system/uppr.service` and
-`/etc/systemd/system/caddy.service`, reloads systemd, enables both units for
-startup, restarts them, and prints their resulting status. It also repairs
-ownership under the Uppr installation directory and every path registered in
-`workspaces.conf`, including workspaces stored outside the installation. This
-fixes files left behind by older root-running units. Repository pulls use
-`git pull --ff-only`; if any pull fails, reload stops before changing or
-restarting the services.
-
 If Docker itself reports `permission denied` for `/var/run/docker.sock`, add the
 operator account to the Docker group, then log out and back in so the new group
 is present in the login session:
@@ -149,10 +135,10 @@ is present in the login session:
 sudo usermod -aG docker "$USER"
 ```
 
-Do not run `uppr`, `uppr launch`, or the whole `reload.sh` with `sudo`; doing so
+Do not run `uppr`, `uppr launch`, or `uppr service` itself with `sudo`; doing so
 creates root-owned generated files and workspace contents. The narrow `sudo`
-prompts inside `reload.sh` are expected because systemd unit installation and
-ownership repair are privileged operations.
+prompts from `uppr service` are expected because systemd unit installation and
+service control are privileged operations.
 
 The Uppr unit regenerates the root runtime files, launches the managed app
 containers, and then runs the current executable directly on port 9944. The

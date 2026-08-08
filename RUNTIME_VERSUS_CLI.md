@@ -98,7 +98,6 @@ go.sum
 README.md
 ENV_SCHEMA_JSON.md
 Dockerfile
-reload.sh
 ```
 
 The root `Dockerfile` is source when it describes how to package or run the
