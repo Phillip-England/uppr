@@ -11,29 +11,26 @@ hashtags:
 
 ## Intent
 
-Protect the deployment UI with simple admin credentials, signed session cookies, and bounded login failure tracking stored in a private SQLite database.
-
-This gives a small self-hosted tool durable abuse protection without requiring an external auth provider.
+Protect a deployment web UI with simple admin credentials, signed short-lived sessions, security headers, and bounded login failure tracking in a private SQLite database.
 
 ## When To Use
 
-Use this for an internal or operator-facing web UI where a single admin credential pair is acceptable and the service should remain self-contained.
+Use this pattern for a small self-hosted admin surface where a full external identity provider is unnecessary, but credential checks, session integrity, and brute-force resistance still matter.
 
 ## Implementation
 
-Server configuration is loaded from `config/.env` using `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `SESSION_SECRET`, and `ADDR`. Server mode refuses to start when required admin values are blank.
+Server mode reads `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `SESSION_SECRET`, and `ADDR` from `config/.env`. `loadServerConfig` rejects empty admin credentials or session secret. `ensureAuthDBFile` creates `data/main.sqlite`, initializes a `login_failures` table and index, and sets file mode `0600`.
 
-Login sessions use the `uppr_session` cookie and an in-memory session store with a 12 hour TTL. Login failure attempts are recorded by client IP in `data/main.sqlite` in a `login_failures` table with an `(ip, attempted_at)` index. The database file is chmodded to `0600` after creation. The login path blocks an IP after five failures in a 24 hour window and purges old rows during login checks so the table remains bounded.
+Login uses HMAC constant-time comparisons for submitted username and password. On success, `createSession` stores an in-memory session ID with a 12-hour TTL and returns an `HttpOnly`, `SameSite=Lax` signed cookie. Cookie signatures are HMAC-SHA256 using `SESSION_SECRET`.
 
-Generated public Caddy routes also include client-IP rate limiting. Global Uppr route policy is configured with `UPPR_RATE_LIMIT_ENABLED`, `UPPR_RATE_LIMIT_ZONE`, `UPPR_RATE_LIMIT_EVENTS`, and `UPPR_RATE_LIMIT_WINDOW`.
+Failed logins are tracked by client IP in SQLite. `isBlocked` and `recordFailure` purge rows older than 24 hours, then block requests after five failures in the active window. `securityHeaders` sets `X-Content-Type-Options: nosniff` and `Referrer-Policy: same-origin`.
 
 ## Project Evidence
 
-- `auth.go` defines `serverConfig`, `loadServerConfig`, `initAuthDB`, `ensureAuthDBFile`, `handleLogin`, session helpers, and login failure constants.
-- `generate.go` defines `upprRateLimitFromEnv` and `writeCaddyRateLimit`.
-- `workspace.go` and `web.go` call `ensureAuthDBFile` during server/project preparation.
-- `main_test.go` verifies private database permissions and required env behavior.
+- `auth.go`: `loadServerConfig`, `initAuthDB`, `ensureAuthDBFile`, `handleLogin`, session helpers, failure tracking, and security headers.
+- `web.go`: `serveServer` opens the SQLite database and enables `authRequired`.
+- `README.md`: documents required admin settings and bounded login failure tracking.
 
 ## Reuse Notes
 
-Use constant-time comparison for credentials, keep the session secret out of source control, and store only the minimum durable abuse signal needed. File permissions matter for local SQLite databases that contain IP addresses or login metadata.
+Keep the session store and login-failure database scoped to the control plane. This pattern is intentionally simple; use a dedicated identity provider when you need multi-user roles, password reset, audit trails, or federated authentication.

@@ -4,36 +4,34 @@ hashtags:
   - "#environment"
   - "#schema"
   - "#configuration"
-  - "#developer-workflow"
+  - "#onboarding"
 ---
 
 # Schema Driven Environment Preparation
 
 ## Intent
 
-Let each managed application declare the environment variables it needs, then have the control plane create missing `config/.env` entries without overwriting existing values.
-
-This gives app repositories a machine-readable deployment contract while keeping real secret values private and local.
+Let each managed application declare its expected environment variables in source while storing actual runtime values outside Git. The control plane prepares missing keys without overwriting existing secrets.
 
 ## When To Use
 
-Use this when one tool prepares many application repositories and needs to know which environment keys to collect, validate, display, or export.
+Use this pattern when multiple apps need repeatable onboarding, but each app has different environment variables and secret values must remain runtime-local.
 
 ## Implementation
 
-Apps can include a root-level `schema.json` with a `variables` array. Each variable can use `name` or `key`, plus optional `description`, `example`, and `required` fields. The legacy `env.schema` file is also supported as one variable name per line.
+Managed apps can commit a root-level `schema.json` with a top-level `variables` array. Each variable has a `name` and may include `description`, `example`, and `required`. Uppr still supports the legacy `env.schema` format with one variable name per line.
 
-`prepareRepoEnv` reads the schema, ensures `<repo>/config` and `<repo>/data` exist, creates `<repo>/data/main.sqlite` if missing, then updates `<repo>/config/.env`. Existing key values are preserved; only missing keys are appended as blank `KEY=` lines. Invalid JSON, duplicate variable names, and invalid environment variable names fail early with path-specific errors.
+After pull/sync, `prepareRepoEnv` reads the app schema and creates or updates the app's `config/.env` with missing blank entries. Existing values are preserved. The web UI renders schema descriptions and examples in repository configuration pages, and `/env/download` exports workspace environment state.
 
-The web UI reuses the same schema information to render editable environment fields and supports workspace-wide preparation from the Sync page.
+The integration docs recommend `schema.json` as the canonical machine-readable environment reference and warn against putting real secrets in the schema.
 
 ## Project Evidence
 
-- `main.go` defines `envSchemaFile`, `envJSONSchemaFile`, `prepareRepoEnv`, `readRepoEnvSchema`, and `readEnvJSONSchema`.
-- `web.go` uses `repoAppEnvFields`, `saveRepoAppEnvFromForm`, and `handleSyncPrepare` to expose the same environment contract in the UI.
-- `dump.go` and `public.go` document `schema.json` as the preferred app integration contract.
-- `main_test.go` includes tests for JSON schema parsing and environment preparation behavior.
+- `main.go`: constants `envSchemaFile` and `envJSONSchemaFile`, `prepareRepoEnv`, and schema parsing helpers.
+- `web.go`: `repoAppEnvFields`, repository config rendering, `saveRepoAppEnvFromForm`, and `handleEnvDownload`.
+- `ENV_SCHEMA_JSON.md`: documents the preferred schema format.
+- `dump.go`: generated app integration guidance references `schema.json` and `env.schema`.
 
 ## Reuse Notes
 
-Prefer a structured schema over a loose list when a UI or automation needs descriptions, examples, and required flags. Preserve existing `.env` values by parsing and appending keys instead of rewriting the full file from schema defaults.
+Use schema files for variable names and safe guidance only. Keep values in environment-specific files, and make updates additive so repeated syncs never erase existing secrets.

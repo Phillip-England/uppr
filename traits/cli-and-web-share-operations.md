@@ -3,42 +3,35 @@ title: CLI And Web Share Operations
 hashtags:
   - "#cli"
   - "#web-ui"
+  - "#architecture"
   - "#operations"
-  - "#reuse"
 ---
 
 # CLI And Web Share Operations
 
 ## Intent
 
-Expose operational workflows through both CLI commands and a web UI while keeping the core behavior in shared Go functions.
-
-This avoids drift between automation-friendly commands and browser-driven operator workflows.
+Expose the same operational capabilities through command-line commands and a browser UI by routing both surfaces through shared Go functions.
 
 ## When To Use
 
-Use this when the same deployment tool must support local terminal workflows, remote authenticated administration, and less command-line-oriented operational tasks.
+Use this pattern when operators need both scriptable automation and a manual control panel, and divergence between the two would create deployment risk.
 
 ## Implementation
 
-The CLI entry point in `runWithServe` dispatches commands such as `add`, `pull`, `push`, `generate`, `launch`, `backup`, `restore`, `service`, `web`, and `serve`. The web handlers call the same underlying functions where possible:
+Command dispatch in `runWithServe` maps CLI commands to functions such as `addRepo`, `pullRepos`, `pushRepos`, `generateProjectFiles`, `backupState`, `restoreState`, `generateServerFilesAt`, and `launchServer`.
 
-- Repo add/edit/delete flows read and write `repos.conf`.
-- Pull and push buttons call `pullRepoAt` and `pushRepoAt`.
-- Generate actions call `generateProjectFilesAt` or `generateServerFilesAt`.
-- Sync preparation calls `prepareRepoEnv`.
-- Launch shells run the same `uppr launch .` or `docker compose` command shown to the operator.
-- Backup and restore routes reuse `backupState` and `restoreState` behavior.
+The web handlers call the same lower-level operations: repository pages use `readRepos`, `writeRepos`, `pullRepoAt`, and `pushRepoAt`; the generate page calls `generateProjectFilesAt` or `generateServerFilesAt`; launch routes call `launchServer`; backup routes call `backupState`, `restoreState`, and `migrateState`.
 
-The local `uppr web [path]` mode is unauthenticated and bound to `127.0.0.1:9944`. The deployment `uppr serve [path]` mode requires authentication and can bind to a configured or supplied address.
+Both surfaces operate on the same runtime root files (`config/.env`, `repos.conf`, `workspaces.conf`, generated deployment files, and app `config/`/`data/` directories), so state changed in one surface is immediately visible in the other.
 
 ## Project Evidence
 
-- `main.go` defines `runWithServe` and the shared CLI operations.
-- `web.go` defines `serveWeb`, `serveServer`, route handlers, and shared operation calls.
-- `auth.go` supplies authentication only when `authRequired` is true.
-- `main_test.go` verifies CLI dispatch and serve behavior.
+- `main.go`: CLI command dispatch and shared repo/git/generation helpers.
+- `web.go`: handlers for repos, sync, generate, launch, credentials, and backup.
+- `backup.go`: backup, restore, and migration functions reused by CLI and web flows.
+- `README.md`: documents equivalent CLI and web workflows.
 
 ## Reuse Notes
 
-Design the web layer as a thin adapter over command functions, not as a separate implementation. Keep local-only web mode and remote authenticated server mode explicit so development convenience does not weaken deployed access controls.
+Design handlers as adapters around domain functions rather than separate implementations. This keeps validation, file formats, and failure behavior consistent across CLI automation and web operations.

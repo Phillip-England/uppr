@@ -913,13 +913,13 @@ func (app *webApp) handleLaunch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	root := app.root
-	command := "docker compose down --remove-orphans && docker compose up --build"
-	notice := "Launch clears the existing Compose stack and orphaned containers before rebuilding it. Named volumes are preserved. Use Ctrl+C in the terminal to stop it."
+	command := "docker compose up --build --remove-orphans"
+	notice := "Launch builds images and updates changed services while unchanged containers keep running. Orphaned containers are removed. Named volumes are preserved. Use Ctrl+C in the terminal to stop it."
 	if app.serverRoot != "" {
 		// The server control plane is native; its Compose project contains apps only.
 		root = app.serverRoot
 		command = "uppr launch ."
-		notice = "Launch regenerates all runtime files, replaces the managed app containers, waits for them to be ready, then validates and force-reloads (or starts) native Caddy. Uppr remains available throughout. Named volumes are preserved."
+		notice = "Launch regenerates runtime files, builds images, updates changed services while unchanged containers keep running, waits for readiness, then validates and force-reloads (or starts) native Caddy. Uppr remains available throughout. Named volumes are preserved."
 	}
 	page := launchPage{Root: root, BasePath: app.basePath, Message: r.URL.Query().Get("message"), Command: command, Notice: notice}
 	if err := launchTemplate.Execute(w, page); err != nil {

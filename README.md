@@ -146,9 +146,10 @@ Caddy unit regenerates once more immediately before it runs `caddyx` directly
 on ports 80 and 443, so boot never depends on stale generated files. Managed
 app ports are published by Docker only on `127.0.0.1`, and the generated
 Caddyfile proxies to those loopback ports. After changing or onboarding an app,
-`uppr launch` (or Launch in the web UI) regenerates everything, safely replaces
-every app container, and reloads Caddy while Uppr remains available. On a first
-launch where Caddy is not running yet, Uppr starts it instead.
+`uppr launch` (or Launch in the web UI) regenerates everything, updates changed
+app containers while leaving unchanged ones running, and reloads Caddy while
+Uppr remains available. On a first launch where Caddy is not running yet, Uppr
+starts it instead.
 
 Uppr's public route is rate limited by client IP. The default permits 100
 requests per minute; use `UPPR_RATE_LIMIT_ENABLED`, `UPPR_RATE_LIMIT_EVENTS`,
@@ -348,10 +349,10 @@ At the server root, launch the whole system with:
 ```
 
 `uppr launch` creates any missing server files, regenerates the root runtime
-files from all registered workspaces, clears that Compose project's existing
-containers and orphans (while preserving named volumes), runs
-`docker compose up --build` from the server root, waits until every container is
-running (and healthy when it has a healthcheck), and then validates and
+files from all registered workspaces, runs `docker compose up --build` from the
+server root to update changed services and remove orphans while leaving
+unchanged containers running, waits until every container is running (and
+healthy when it has a healthcheck), and then validates and
 force-reloads Caddy with the new configuration (or starts Caddy when it is not
 running yet). A crashing container or failed Caddy refresh makes launch fail
 instead of displaying a false success.

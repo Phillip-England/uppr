@@ -4,46 +4,36 @@ hashtags:
   - "#runtime"
   - "#configuration"
   - "#persistence"
-  - "#sqlite"
+  - "#secrets"
 ---
 
 # Project-Owned Runtime Directories
 
 ## Intent
 
-Keep mutable application state in a small, predictable directory contract owned by each runtime root or app repository. Configuration lives under `config/`, durable data lives under `data/`, and source-controlled metadata lives in simple root-level files.
-
-This keeps secrets, databases, generated launch files, and repository metadata easy to mount, back up, ignore from Git, and recreate during startup.
+Keep runtime configuration, credentials, generated deployment files, and mutable data in an initialized runtime root instead of coupling them to the CLI source checkout. This lets the same `uppr` executable operate against separate production, staging, or client-specific roots.
 
 ## When To Use
 
-Use this when a CLI or deployment manager needs to operate from many possible project roots and must separate checked-in source from mutable runtime state.
+Use this pattern when a deployment manager should be installable as a binary while each managed environment owns its own secrets, repository registry, generated files, and persistent state.
 
 ## Implementation
 
-The project root uses:
+Initialize a runtime with `uppr init [path]`. The command creates `config/.env`, `repos.conf`, and `data/main.sqlite` under the selected root. Runtime files are written with restrictive permissions where appropriate: `writeFileIfMissing` uses `0600`, and `ensureAuthDBFile` chmods `data/main.sqlite` to `0600`.
 
-- `config/.env` for credentials and runtime environment.
-- `data/main.sqlite` for local SQLite state.
-- `repos.conf` for managed app repository metadata.
-- `workspaces.conf` for server-mode workspace registry.
+Most project commands call `findProjectRoot(".")`, which walks upward until it finds an initialized root. Web and server commands call `requireEnvFile` and refuse to start if `config/.env` is missing, making initialization explicit.
 
-App repositories managed by Uppr use the same runtime shape:
-
-- `<repo>/config/.env` for app-specific environment values.
-- `<repo>/data/main.sqlite` as the conventional primary app database.
-- `<repo>/config` and `<repo>/data` are mounted into containers at `/app/config` and `/app/data`.
-
-Startup and preparation routines create required directories with `0755`, create private mutable files with `0600`, and refuse to start the web/server path when `config/.env` is missing. The `.gitignore` excludes `config/.env`, `data/`, and other runtime outputs.
+The source/runtime split is documented as an operating model: source contains Go code, tests, docs, and packaging files, while runtime roots contain `config/.env`, `repos.conf`, `workspaces.conf`, `Caddyfile`, `docker-compose.yml`, `Makefile`, and `data/`.
 
 ## Project Evidence
 
-- `main.go` defines `envFile`, `reposFile`, `defaultDBPath`, `initProject`, `ensureProjectFiles`, `prepareRepoEnv`, and `writeFileIfMissing`.
-- `workspace.go` defines `ensureServerFiles` and `ensureWorkspaceFiles`.
-- `generate.go` mounts app `config` and `data` directories in generated Compose services.
-- `.gitignore` excludes `config/.env` and `data/`.
-- `README.md` documents the runtime layout and app contract.
+- `main.go`: `initProject`, `writeFileIfMissing`, `findProjectRoot`, and command dispatch.
+- `web.go`: `ensureProjectFiles` and `serveWeb`.
+- `workspace.go`: `ensureServerFiles` and `requireEnvFile`.
+- `auth.go`: `ensureAuthDBFile`.
+- `RUNTIME_VERSUS_CLI.md`: explicit source-versus-runtime guidance.
+- `.gitignore`: ignores runtime files such as `config/.env`, `data/`, and the built `uppr` binary.
 
 ## Reuse Notes
 
-Copy the directory contract and creation rules, not the exact file names blindly. Make the runtime root explicit, keep secrets and databases out of Git, and use startup checks that fail clearly when required private config is absent.
+Copy the root-detection and initialization boundary, not the exact file names unless they fit the target project. Runtime roots should be portable, private by default, and safe to create outside the source repository.

@@ -305,8 +305,7 @@ generate:
 	uppr generate
 
 launch: generate
-	docker compose down --remove-orphans
-	docker compose up --build
+	docker compose up --build --remove-orphans
 
 stop:
 	docker compose down

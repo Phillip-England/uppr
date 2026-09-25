@@ -699,8 +699,8 @@ func TestGenerateProjectFilesAt(t *testing.T) {
 	if !strings.Contains(makefile, "launch: generate") {
 		t.Fatalf("unexpected Makefile:\n%s", makefile)
 	}
-	if !strings.Contains(makefile, "docker compose down --remove-orphans") {
-		t.Fatalf("Makefile launch should clear stale containers:\n%s", makefile)
+	if !strings.Contains(makefile, "docker compose up --build --remove-orphans") || strings.Contains(makefile, "docker compose down --remove-orphans") {
+		t.Fatalf("Makefile launch should update services without stopping the stack:\n%s", makefile)
 	}
 }
 
@@ -1656,6 +1656,37 @@ func TestWebLaunchReplacesAppsWhileNativeUpprStaysRunning(t *testing.T) {
 	}
 }
 
+func TestLaunchServerDoesNotStopComposeStack(t *testing.T) {
+	root := t.TempDir()
+	if err := bootstrapServiceRoot(root); err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	logPath := filepath.Join(t.TempDir(), "docker.log")
+	dockerPath := filepath.Join(bin, "docker")
+	if err := os.WriteFile(dockerPath, []byte("#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$UPPR_TEST_DOCKER_LOG\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	caddyPath := filepath.Join(bin, "caddyx")
+	if err := os.WriteFile(caddyPath, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("CADDYX_PATH", caddyPath)
+	t.Setenv("UPPR_TEST_DOCKER_LOG", logPath)
+
+	if err := launchServer([]string{root}); err != nil {
+		t.Fatal(err)
+	}
+	commands, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := strings.TrimSpace(string(commands)), "compose up --build -d --remove-orphans --wait --wait-timeout 120"; got != want {
+		t.Fatalf("Docker commands = %q, want only %q", got, want)
+	}
+}
+
 func TestWebLaunchKeepsInteractiveLocalCommand(t *testing.T) {
 	root := newTestProject(t)
 	app := &webApp{root: root}
@@ -1665,7 +1696,7 @@ func TestWebLaunchKeepsInteractiveLocalCommand(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
 	}
-	if body := response.Body.String(); !strings.Contains(body, `data-terminal-command="docker compose down --remove-orphans &amp;&amp; docker compose up --build"`) {
+	if body := response.Body.String(); !strings.Contains(body, `data-terminal-command="docker compose up --build --remove-orphans"`) {
 		t.Fatalf("local launch command changed unexpectedly:\n%s", body)
 	}
 }
