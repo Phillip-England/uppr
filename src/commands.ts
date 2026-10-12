@@ -3,12 +3,16 @@ import * as tar from "tar";
 import path from "node:path";
 import os from "node:os";
 import net from "node:net";
+import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
+import { gitToken, removeGitToken, saveGitToken } from "./auth.ts";
 import {
   appStatus,
+  appRouting,
   active,
   containerName,
   containerPort,
+  defaultRateLimit,
   envName,
   exists,
   fail,
@@ -37,6 +41,7 @@ import {
   select,
   serviceState,
   sorted,
+  starterSchema,
   unitDir,
   unitName,
   validDomain,
@@ -44,6 +49,7 @@ import {
   which,
   type Manifest,
   type Repo,
+  type Schema,
   type Variable,
 } from "./core.ts";
 
@@ -178,9 +184,41 @@ async function ready(m: Manifest, r: Repo) {
 function readRegistry() {
   return installedPads();
 }
+function caddyBinary() {
+  return exists("/usr/local/bin/uppr-caddy")
+    ? "/usr/local/bin/uppr-caddy"
+    : which("uppr-caddy") || which("caddy");
+}
+function rateLimitCaddy() {
+  const binary = caddyBinary();
+  if (!binary) fail("Caddy is missing; run uppr deps install");
+  if (!probe(binary, ["list-modules"]).out.split("\n").includes("http.handlers.rate_limit"))
+    fail("Caddy lacks the rate_limit module; run uppr deps caddy");
+  return binary;
+}
+function buildRateLimitCaddy() {
+  linux();
+  if (!which("go") && !which("xcaddy"))
+    fail("Go or xcaddy is required; install Go, then run uppr deps caddy");
+  const stage = fs.mkdtempSync(path.join(os.tmpdir(), "uppr-caddy-build-"));
+  const binary = path.join(stage, "uppr-caddy");
+  try {
+    console.log("Building Caddy with the rate_limit module...");
+    const args = ["build", "--output", binary, "--with", "github.com/mholt/caddy-ratelimit"];
+    if (which("xcaddy")) run("xcaddy", args, { cwd: stage });
+    else run("go", ["run", "github.com/caddyserver/xcaddy/cmd/xcaddy@latest", ...args], { cwd: stage });
+    if (!probe(binary, ["list-modules"]).out.split("\n").includes("http.handlers.rate_limit"))
+      fail("custom Caddy build lacks the rate_limit module");
+    privileged("mkdir", ["-p", "/usr/local/bin"]);
+    privileged("install", ["-m", "0755", binary, "/usr/local/bin/uppr-caddy.new"]);
+    privileged("mv", ["-f", "/usr/local/bin/uppr-caddy.new", "/usr/local/bin/uppr-caddy"]);
+    console.log("installed /usr/local/bin/uppr-caddy");
+  } finally {
+    fs.rmSync(stage, { recursive: true, force: true });
+  }
+}
 function validateCaddy(body: string) {
-  const caddy = which("caddy");
-  if (!caddy) fail("caddy is missing; run uppr deps install");
+  const caddy = rateLimitCaddy();
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "uppr-caddy-"));
   const p = path.join(dir, "Caddyfile");
   try {
@@ -204,9 +242,8 @@ async function installHost(root: string, m: Manifest) {
     );
   for (const r of m.repos) prepareRepo(root, r);
   generate(root, m);
-  const caddy = which("caddy");
-  if (!caddy || !which("docker"))
-    fail("caddy and docker are required; run uppr deps install");
+  const caddy = rateLimitCaddy();
+  if (!which("docker")) fail("docker is required; run uppr deps install");
   const pads = readRegistry();
   pads[m.id] = { id: m.id, root };
   const body = globalCaddy(pads);
@@ -224,8 +261,12 @@ async function installHost(root: string, m: Manifest) {
       caddyUnit = path.join(stage, "uppr-caddy.service");
     fs.writeFileSync(caddyFile, body);
     fs.writeFileSync(reg, JSON.stringify(pads[m.id], null, 2) + "\n");
-    fs.writeFileSync(caddyUnit, renderCaddyUnit(caddy));
+    const caddyHash = crypto.createHash("sha256").update(fs.readFileSync(caddy)).digest("hex");
+    fs.writeFileSync(caddyUnit, renderCaddyUnit(caddy) + `# binary sha256 ${caddyHash}\n`);
     verifyUnit(caddyUnit);
+    const installedCaddyUnit = path.join(unitDir, "uppr-caddy.service");
+    const caddyUnitChanged = !exists(installedCaddyUnit) ||
+      fs.readFileSync(installedCaddyUnit, "utf8") !== fs.readFileSync(caddyUnit, "utf8");
     console.log("Installing systemd units and Caddy routes...");
     privileged("mkdir", ["-p", registryDir, "/var/lib/uppr/caddy"]);
     const old = exists(unitDir)
@@ -271,7 +312,7 @@ async function installHost(root: string, m: Manifest) {
       "-m",
       "0644",
       caddyUnit,
-      path.join(unitDir, "uppr-caddy.service"),
+      installedCaddyUnit,
     ]);
     console.log("Reloading systemd and enabling services...");
     privileged("systemctl", ["daemon-reload"]);
@@ -281,7 +322,7 @@ async function installHost(root: string, m: Manifest) {
     for (const name of changed) privileged("systemctl", ["restart", name]);
     privileged("systemctl", ["enable", "uppr-caddy.service"]);
     console.log("Starting or reloading Caddy...");
-    privileged("systemctl", ["reload-or-restart", "uppr-caddy.service"]);
+    privileged("systemctl", [caddyUnitChanged ? "restart" : "reload-or-restart", "uppr-caddy.service"]);
     console.log(
       `installed ${m.repos.length} app units and refreshed shared Caddy routes`,
     );
@@ -332,20 +373,11 @@ function uninstallHost(m: Manifest) {
     fs.rmSync(stage, { recursive: true, force: true });
   }
 }
-function credentials() {
-  const p = path.join(os.homedir(), ".config", "uppr", "credentials.json");
-  return {
-    path: p,
-    token: exists(p)
-      ? (JSON.parse(fs.readFileSync(p, "utf8")).token as string)
-      : "",
-  };
-}
 function shellQuote(value: string) {
   return `'${value.replaceAll("'", `'"'"'`)}'`;
 }
 function git(root: string, args: string[]) {
-  const { token } = credentials();
+  const token = gitToken();
   let env = process.env,
     dir = "";
   try {
@@ -393,7 +425,7 @@ function protectRepo(p: string) {
     fs.writeFileSync(f, old + block);
   }
 }
-function push(root: string, r: Repo, message: string) {
+function push(root: string, r: Repo, message: string, confirmed = false) {
   const p = repoDir(root, r);
   if (!exists(path.join(p, ".git"))) fail(`${r.name} is not cloned`);
   protectRepo(p);
@@ -404,7 +436,7 @@ function push(root: string, r: Repo, message: string) {
   console.log(
     `[${r.name}] changes to commit and push:\n${status.out || "(no local changes)"}`,
   );
-  if (!confirm("Continue?")) fail("push canceled");
+  if (!confirmed && !confirm("Continue?")) fail("push canceled");
   git(p, ["add", "-A"]);
   if (probe("git", ["diff", "--cached", "--name-only"], p).out)
     git(p, ["commit", "-m", message]);
@@ -421,38 +453,9 @@ export function schemaCommand(args: string[]) {
   if (sub === "generate") {
     if (exists(p) && !args.includes("--force"))
       fail(`${p} already exists; use schema edit or --force`);
-    const source =
-      option(args, "--from-env") ||
-      [".env.example", ".env.sample", ".env.template"]
-        .map((x) => path.join(repoDir(root, r), x))
-        .find(exists);
-    let names: string[] = [];
-    if (source) {
-      const content = fs.readFileSync(source, "utf8");
-      names = [
-        ...new Set(
-          content
-            .split("\n")
-            .map((x) =>
-              x
-                .trim()
-                .replace(/^export\s+/, "")
-                .split("=")[0]
-                .trim(),
-            )
-            .filter((x) => envName.test(x)),
-        ),
-      ];
-    }
-    const schema = {
-      variables: names.map((name) => ({
-        name,
-        description: "",
-        required: true,
-      })),
-    };
+    const schema = starterSchema(root, r, option(args, "--from-env"));
     saveSchema(p, schema);
-    console.log(`generated ${p} with ${names.length} variables`);
+    console.log(`generated ${p} with ${schema.variables.length} variables`);
     return;
   }
   if (sub === "show") {
@@ -462,7 +465,7 @@ export function schemaCommand(args: string[]) {
   if (sub === "edit") {
     const tmp = path.join(repoDir(root, r), `.schema-${process.pid}.json`);
     if (exists(p)) fs.copyFileSync(p, tmp);
-    else fs.writeFileSync(tmp, '{"variables": []}\n');
+    else fs.writeFileSync(tmp, JSON.stringify(starterSchema(root, r), null, 2) + "\n");
     try {
       const editor = process.env.VISUAL || process.env.EDITOR || "vi";
       run(editor.split(/\s+/)[0], [...editor.split(/\s+/).slice(1), tmp]);
@@ -481,7 +484,7 @@ export function schemaCommand(args: string[]) {
       fail(
         "usage: uppr schema add <app> <VARIABLE> [--description TEXT] [--example TEXT] [--optional]",
       );
-    const s = exists(p) ? readSchema(p) : { variables: [] as Variable[] };
+    const s = exists(p) ? readSchema(p) : starterSchema(root, r);
     if (s.variables.some((x) => x.name === variable))
       fail(`${variable} already exists`);
     s.variables.push({
@@ -505,7 +508,33 @@ export function schemaCommand(args: string[]) {
     console.log(`removed ${variable} from ${p}`);
     return;
   }
-  fail("usage: uppr schema generate|edit|show|add|remove <name>");
+  if (sub === "domains") {
+    if (!args[2]) fail("usage: uppr schema domains <app> <domain[,domain...]>");
+    const s: Schema = exists(p) ? readSchema(p) : starterSchema(root, r);
+    s.domains = args.slice(2).join(",").split(",").map((x) => x.trim());
+    saveSchema(p, s);
+    console.log(`updated domains in ${p}; run uppr install to apply`);
+    return;
+  }
+  if (sub === "rate") {
+    const s: Schema = exists(p) ? readSchema(p) : starterSchema(root, r);
+    const events = option(args, "--events");
+    const window = option(args, "--window");
+    const zone = option(args, "--zone");
+    if (!events && !window && !zone)
+      fail("usage: uppr schema rate <app> --events N --window 1m --zone dynamic");
+    s.rate_limit = {
+      ...defaultRateLimit,
+      ...s.rate_limit,
+      ...(events !== undefined ? { events: Number(events) } : {}),
+      ...(window !== undefined ? { window } : {}),
+      ...(zone !== undefined ? { zone } : {}),
+    };
+    saveSchema(p, s);
+    console.log(`updated rate limit in ${p}; run uppr install to apply`);
+    return;
+  }
+  fail("usage: uppr schema generate|edit|show|add|remove|domains|rate <name>");
 }
 export async function command(argv: string[]) {
   const [cmd, ...args] = argv;
@@ -538,13 +567,21 @@ export async function command(argv: string[]) {
     return;
   }
   if (cmd === "deps") {
+    if (args[0] === "caddy") {
+      only(args, 1, "uppr deps caddy");
+      buildRateLimitCaddy();
+      return;
+    }
     if (args[0] === "check") {
       let missing = false;
       for (const tool of ["git", "docker", "caddy", "systemctl", "bun"]) {
-        const found = tool === "bun" ? exists(process.execPath) : !!which(tool);
+        const found = tool === "bun" ? exists(process.execPath) : tool === "caddy" ? !!caddyBinary() : !!which(tool);
         console.log(found ? "OK" : "MISSING", tool);
         missing ||= !found;
       }
+      const rateLimit = !!caddyBinary() && probe(caddyBinary(), ["list-modules"]).out.split("\n").includes("http.handlers.rate_limit");
+      console.log(rateLimit ? "OK" : "MISSING", "Caddy rate_limit module");
+      missing ||= !rateLimit;
       if (missing) fail("dependencies missing");
       return;
     }
@@ -558,13 +595,16 @@ export async function command(argv: string[]) {
           "docker.io",
           "docker-buildx",
           "caddy",
+          "golang-go",
         ]);
         privileged("systemctl", ["enable", "--now", "docker.service"]);
+        buildRateLimitCaddy();
         return;
       }
       if (which("dnf")) {
-        privileged("dnf", ["install", "-y", "git", "moby-engine", "caddy"]);
+        privileged("dnf", ["install", "-y", "git", "moby-engine", "caddy", "golang"]);
         privileged("systemctl", ["enable", "--now", "docker.service"]);
+        buildRateLimitCaddy();
         return;
       }
       fail("automatic dependency installation supports apt and dnf");
@@ -573,18 +613,15 @@ export async function command(argv: string[]) {
   }
   if (cmd === "auth") {
     only(args, 1, "uppr auth login|status|logout");
-    const c = credentials();
     if (args[0] === "status")
-      console.log(c.token ? "GitHub token saved" : "no GitHub token saved");
+      console.log(gitToken() ? "GitHub token saved" : "no GitHub token saved");
     else if (args[0] === "logout") {
-      fs.rmSync(c.path, { force: true });
+      removeGitToken();
       console.log("GitHub token removed");
     } else if (args[0] === "login") {
       if (!process.stdin.isTTY) fail("auth login needs a terminal");
       const token = ttyLine("GitHub personal access token: ", true);
-      if (!token) fail("token cannot be empty");
-      fs.mkdirSync(path.dirname(c.path), { recursive: true, mode: 0o700 });
-      fs.writeFileSync(c.path, JSON.stringify({ token }), { mode: 0o600 });
+      saveGitToken(token);
       console.log("GitHub token saved");
     } else fail("usage: uppr auth login|status|logout");
     return;
@@ -720,8 +757,9 @@ export async function command(argv: string[]) {
   }
   if (cmd === "push") {
     if (args.length < 3 || args[1] !== "-m")
-      fail("usage: uppr push <name> -m <message>");
-    push(root, select(m, args[0])[0], args.slice(2).join(" "));
+      fail("usage: uppr push <name> -m <message> [--yes]");
+    const confirmed = args.at(-1) === "--yes";
+    push(root, select(m, args[0])[0], args.slice(2, confirmed ? -1 : undefined).join(" "), confirmed);
     return;
   }
   if (cmd === "prepare") {
@@ -817,8 +855,9 @@ export async function command(argv: string[]) {
     if (args.length > 1) fail("usage: uppr status [name]");
     for (const r of select(m, args[0])) {
       const s = appStatus(m, r);
+      const domains = appRouting(root, r).domains;
       console.log(
-        `${r.name}: ${s.state} | service ${s.service} | container ${s.container} | health ${s.health} | https://${r.domain} → 127.0.0.1:${r.host_port} → ${containerPort(root, r)}`,
+        `${r.name}: ${s.state} | service ${s.service} | container ${s.container} | health ${s.health} | ${domains.map((d) => `https://${d}`).join(", ")} → 127.0.0.1:${r.host_port} → ${containerPort(root, r)}`,
       );
     }
     return;
@@ -843,10 +882,13 @@ export async function command(argv: string[]) {
   if (cmd === "doctor") {
     let bad = false;
     for (const tool of ["git", "docker", "caddy", "bun"]) {
-      const ok = tool === "bun" ? exists(process.execPath) : !!which(tool);
+      const ok = tool === "bun" ? exists(process.execPath) : tool === "caddy" ? !!caddyBinary() : !!which(tool);
       console.log(ok ? "OK" : "MISSING", tool);
       bad ||= !ok;
     }
+    const caddyRateLimit = !!caddyBinary() && probe(caddyBinary(), ["list-modules"]).out.split("\n").includes("http.handlers.rate_limit");
+    console.log(caddyRateLimit ? "OK" : "MISSING", "Caddy rate_limit module");
+    bad ||= !caddyRateLimit;
     if (which("docker")) {
       const p = probe("docker", ["info", "--format", "{{.ServerVersion}}"]);
       if (!p.ok) {
@@ -967,5 +1009,24 @@ async function restore(archive: string, dest: string) {
   }
 }
 
-const guide = `# Integrating an application with Uppr\n\nCommit a production Dockerfile and schema.json at the repository root. The container must listen on 0.0.0.0 at its configured port. Store persistent data under /app/data and read environment variables from process.env. Uppr bind mounts config/ and data/ and passes config/.env through Docker --env-file. Keep config/ and data/ out of Git and Docker build context. Generate a starter schema with uppr schema generate <app>; edit one with uppr schema edit <app>.\n`;
-export const help = `uppr · deploy Docker apps with systemd and Caddy\n\n  uppr                         interactive dashboard\n  uppr list                    app status, routes, and paths\n  uppr init <dir>              create launchpad\n  uppr add <url> [options]      register app\n  uppr pull <name|--all>       clone or fast-forward checkout only\n  uppr launch <name|--all>     build and run current checkouts; never pulls\n  uppr curl <name> [path] [curl options]  call a repo's local port\n  uppr caddyfile               print this launchpad's Caddyfile\n  uppr schema generate <name> [--from-env FILE]\n  uppr schema edit <name>      edit and validate live schema\n  uppr schema add <name> <VAR> [--optional]\n  uppr schema remove <name> <VAR>\n  uppr prepare [name]          set required environment values\n  uppr generate | install | uninstall\n  uppr serve [path] [name] | restart <name> | stop [name]\n  uppr status [name] | logs <name>\n  uppr push <name> -m <message> | auth login|status|logout\n  uppr backup <archive.tar.gz> | restore <archive> <dir>\n  uppr deps check|install | doctor | dump [dir]\n`;
+const guide = `# Integrating an application with Uppr
+
+Commit a production Dockerfile and schema.json at the repository root. The container must listen on 0.0.0.0 at its configured port. Store persistent data under /app/data and read environment variables from process.env. Uppr bind mounts config/ and data/ and passes config/.env through Docker --env-file. Keep config/ and data/ out of Git and Docker build context.
+
+Example schema.json:
+
+\`\`\`json
+{
+  "domains": ["api.example.com"],
+  "rate_limit": { "events": 100, "window": "1m", "zone": "dynamic" },
+  "variables": [{ "name": "PORT", "example": "3000", "required": false }]
+}
+\`\`\`
+
+The domains array is the source for Caddy routes. If it is absent, Uppr uses the launchpad manifest domain for older apps. Rate limiting applies per client IP through the Caddy rate_limit module. Missing rate_limit values default to 100 events per 1m in zone dynamic. Uppr prefixes the generated zone with the launchpad and app IDs to isolate apps. Set the values per application as needed. Each domain routes to the app's loopback host port. DNS must point to the host. After a schema route change, run uppr install.
+
+Create or update a schema with uppr schema generate <app>, uppr schema domains <app> api.example.com,alt.example.com, and uppr schema rate <app> --events 100 --window 1m --zone dynamic. The dashboard's d key edits these fields. Schema changes are local Git changes; inspect and push them with the dashboard's w key or uppr push <app> -m "Update routes". The dashboard's t key stores a GitHub personal access token for HTTPS remotes; SSH remotes use your SSH key. CLI equivalents are uppr auth login|status|logout.
+
+The Caddy binary must include github.com/mholt/caddy-ratelimit. Run uppr deps install or uppr deps caddy to build one with xcaddy and install it as /usr/local/bin/uppr-caddy. Uppr validates generated Caddyfiles before installing them. Use uppr caddyfile to preview the routes and uppr doctor to check the host.
+`;
+export const help = `uppr · deploy Docker apps with systemd and Caddy\n\n  uppr                         interactive dashboard\n  uppr list                    app status, routes, and paths\n  uppr init <dir>              create launchpad\n  uppr add <url> [options]      register app\n  uppr pull <name|--all>       clone or fast-forward checkout only\n  uppr launch <name|--all>     build and run current checkouts; never pulls\n  uppr curl <name> [path] [curl options]  call a repo's local port\n  uppr caddyfile               print this launchpad's Caddyfile\n  uppr schema generate <name> [--from-env FILE]\n  uppr schema edit <name>      edit and validate live schema\n  uppr schema domains <name> <domain[,domain...]>\n  uppr schema rate <name> --events N --window 1m [--zone dynamic]\n  uppr schema add <name> <VAR> [--optional]\n  uppr schema remove <name> <VAR>\n  uppr prepare [name]          set required environment values\n  uppr generate | install | uninstall\n  uppr serve [path] [name] | restart <name> | stop [name]\n  uppr status [name] | logs <name>\n  uppr push <name> -m <message> | auth login|status|logout\n  uppr backup <archive.tar.gz> | restore <archive> <dir>\n  uppr deps check|install|caddy | doctor | dump [dir]\n`;

@@ -67,6 +67,7 @@ test("schema PORT controls the published container port", () => {
       container_port: 3000,
     };
     f.m.repos.push(r);
+    saveManifest(f.root, f.m);
     const repo = path.join(f.root, "repos", r.name);
     fs.mkdirSync(path.join(repo, "config"), { recursive: true });
     saveSchema(path.join(repo, "schema.json"), {
@@ -81,6 +82,36 @@ test("schema PORT controls the published container port", () => {
   } finally {
     f.cleanup();
   }
+});
+test("schema domains and rate limit drive Caddy routes with safe defaults", () => {
+  const f = fixture();
+  try {
+    const r = {
+      name: "api", url: "https://example.com/api.git", domain: "api.localhost",
+      host_port: 20000, container_port: 3000,
+    };
+    f.m.repos.push(r);
+    saveManifest(f.root, f.m);
+    const repo = path.join(f.root, "repos", r.name);
+    fs.mkdirSync(repo);
+    const file = path.join(repo, "schema.json");
+    saveSchema(file, { variables: [], domains: ["api.example.com", "alt.example.com"] });
+    let caddy = renderCaddy(f.root, f.m);
+    expect(caddy).toContain("api.example.com {");
+    expect(caddy).toContain("alt.example.com {");
+    expect(caddy).not.toContain("api.localhost {");
+    expect(caddy).toContain(`zone uppr-${f.m.id}-api-dynamic {`);
+    expect(caddy).toContain("key {remote_host}");
+    expect(caddy).toContain("events 100");
+    expect(caddy).toContain("window 1m");
+    saveSchema(file, { variables: [], domains: ["api.example.com"], rate_limit: { events: 25, window: "10s", zone: "api" } });
+    caddy = globalCaddy({ [f.m.id]: { id: f.m.id, root: f.root } });
+    expect(caddy).toContain(`zone uppr-${f.m.id}-api-api {`);
+    expect(caddy).toContain("events 25");
+    expect(caddy).toContain("window 10s");
+    expect(() => saveSchema(file, { variables: [], domains: ["bad domain"] })).toThrow();
+    expect(() => saveSchema(file, { variables: [], rate_limit: { events: 0 } })).toThrow();
+  } finally { f.cleanup(); }
 });
 test("schema env setup preserves existing entries and protects secrets", () => {
   const f = fixture();

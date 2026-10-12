@@ -13,6 +13,9 @@ import {
   showInitPad,
   showList,
   showObserve,
+  showPush,
+  showRouting,
+  showSettings,
 } from "./ui.tsx";
 
 function clearScreen() {
@@ -93,6 +96,24 @@ try {
         continue;
       }
       try {
+        if (a.kind === "settings") {
+          await showSettings();
+          continue;
+        }
+        if (a.kind === "routing") {
+          const saved = await showRouting(a.name!);
+          if (saved) await showContinue("Routes saved", "Press w to push the repository, then i to install the routes.");
+          continue;
+        }
+        if (a.kind === "push") {
+          const message = await showPush(a.name!);
+          if (message === null) continue;
+          clearScreen();
+          console.log(`Pushing ${a.name}...`);
+          await command(["push", a.name!, "-m", message, "--yes"]);
+          await showContinue("Repository pushed");
+          continue;
+        }
         if (a.kind === "curl") {
           const route = await showCurlPath(a.name!);
           if (route === null) continue;

@@ -151,6 +151,27 @@ test("curl shows its request and response, and caddyfile is readable without gen
     fs.rmSync(base, { recursive: true, force: true });
   }
 });
+test("schema route commands update the repo and dump documents deployment", () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "uppr-routing-test-"));
+  const root = path.join(base, "pad");
+  try {
+    expect(cli(base, "init", root).status).toBe(0);
+    expect(cli(root, "add", "https://example.com/api.git", "--name", "api").status).toBe(0);
+    fs.mkdirSync(path.join(root, "repos", "api"));
+    expect(cli(root, "schema", "generate", "api").status).toBe(0);
+    expect(cli(root, "schema", "domains", "api", "api.example.com,alt.example.com").status).toBe(0);
+    expect(cli(root, "schema", "rate", "api", "--events", "25", "--window", "10s").status).toBe(0);
+    const caddy = cli(root, "caddyfile");
+    expect(caddy.status).toBe(0);
+    expect(caddy.stdout).toContain("alt.example.com {");
+    expect(caddy.stdout).toContain("events 25");
+    expect(caddy.stdout).toContain("window 10s");
+    expect(cli(root, "dump").status).toBe(0);
+    const guide = fs.readFileSync(path.join(root, "UPPR.md"), "utf8");
+    expect(guide).toContain("rate_limit");
+    expect(guide).toContain("domains");
+  } finally { fs.rmSync(base, { recursive: true, force: true }); }
+});
 
 test("run-app publishes the PORT selected by schema and env", () => {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), "uppr-port-test-"));

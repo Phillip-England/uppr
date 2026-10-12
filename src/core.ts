@@ -19,7 +19,17 @@ export type Variable = {
   example?: string;
   required?: boolean;
 };
-export type Schema = { variables: Variable[] };
+export type RateLimit = { events: number; window: string; zone: string };
+export type Schema = {
+  variables: Variable[];
+  domains?: string[];
+  rate_limit?: Partial<RateLimit>;
+};
+export const defaultRateLimit: RateLimit = {
+  events: 100,
+  window: "1m",
+  zone: "dynamic",
+};
 export const registryDir =
   process.env.UPPR_REGISTRY_DIR || "/etc/uppr/launchpads.d";
 export const unitDir = process.env.UPPR_UNIT_DIR || "/etc/systemd/system";
@@ -344,6 +354,22 @@ export function appSetup(
 export function schemaPath(root: string, r: Repo) {
   return path.join(repoDir(root, r), "schema.json");
 }
+export function starterSchema(root: string, r: Repo, fromEnv?: string): Schema {
+  const source = fromEnv ||
+    [".env.example", ".env.sample", ".env.template"]
+      .map((x) => path.join(repoDir(root, r), x))
+      .find(exists);
+  const names = source
+    ? [...new Set(fs.readFileSync(source, "utf8").split("\n")
+        .map((x) => x.trim().replace(/^export\s+/, "").split("=")[0].trim())
+        .filter((x) => envName.test(x)))]
+    : [];
+  return {
+    domains: [r.domain],
+    rate_limit: { ...defaultRateLimit },
+    variables: names.map((name) => ({ name, description: "", required: true })),
+  };
+}
 export function containerPort(root: string, r: Repo) {
   const file = schemaPath(root, r);
   if (!exists(file)) return r.container_port;
@@ -376,7 +402,38 @@ export function validateSchema(s: Schema) {
     if (v.required !== undefined && typeof v.required !== "boolean")
       fail(`${v.name}: required must be boolean`);
   }
+  if (s.domains !== undefined) {
+    if (!Array.isArray(s.domains) || !s.domains.length)
+      fail("schema domains must be a nonempty array");
+    const domains = new Set<string>();
+    for (const domain of s.domains) {
+      if (!validDomain(domain) || domains.has(domain))
+        fail(`invalid or duplicate schema domain ${domain}`);
+      domains.add(domain);
+    }
+  }
+  if (s.rate_limit !== undefined) {
+    const limit = s.rate_limit;
+    if (!limit || typeof limit !== "object" || Array.isArray(limit))
+      fail("rate_limit must be an object");
+    if (Object.keys(limit).some((key) => !["events", "window", "zone"].includes(key)))
+      fail("rate_limit supports only events, window, and zone");
+    if (limit.events !== undefined && (!Number.isInteger(limit.events) || limit.events < 1))
+      fail("rate_limit.events must be a positive integer");
+    if (limit.window !== undefined && (typeof limit.window !== "string" || !/^\d+(ms|s|m|h)$/.test(limit.window)))
+      fail("rate_limit.window must be a duration such as 1m");
+    if (limit.zone !== undefined && (typeof limit.zone !== "string" || !safeName.test(limit.zone)))
+      fail("rate_limit.zone must be a lowercase name");
+  }
   return s;
+}
+export function appRouting(root: string, r: Repo) {
+  const file = schemaPath(root, r);
+  const schema = exists(file) ? readSchema(file) : undefined;
+  return {
+    domains: schema?.domains || [r.domain],
+    rateLimit: { ...defaultRateLimit, ...schema?.rate_limit },
+  };
 }
 export function readSchema(p: string) {
   return validateSchema(json<Schema>(p));
@@ -499,10 +556,17 @@ export function renderCaddy(root: string, m: Manifest) {
     sorted(m)
       .map((r) => {
         containerPort(root, r);
-        return `\n${r.domain} {\n\treverse_proxy 127.0.0.1:${r.host_port}\n}\n`;
+        return caddyRoutes(root, m.id, r);
       })
       .join("")
   );
+}
+function caddyRoutes(root: string, padId: string, r: Repo) {
+  const { domains, rateLimit } = appRouting(root, r);
+  const zone = `uppr-${padId}-${r.name}-${rateLimit.zone}`;
+  return domains.map((domain) =>
+    `\n${domain} {\n\trate_limit {\n\t\tzone ${zone} {\n\t\t\tkey {remote_host}\n\t\t\tevents ${rateLimit.events}\n\t\t\twindow ${rateLimit.window}\n\t\t}\n\t}\n\treverse_proxy 127.0.0.1:${r.host_port}\n}\n`,
+  ).join("");
 }
 export function globalCaddy(
   pads: Record<string, { id: string; root: string }>,
@@ -520,13 +584,13 @@ export function globalCaddy(
         fail(
           `host port ${r.host_port} used by ${ports.get(r.host_port)} and ${label}`,
         );
-      if (domains.has(r.domain))
-        fail(
-          `domain ${r.domain} used by ${domains.get(r.domain)} and ${label}`,
-        );
       ports.set(r.host_port, label);
-      domains.set(r.domain, label);
-      body += `\n${r.domain} {\n\treverse_proxy 127.0.0.1:${r.host_port}\n}\n`;
+      for (const domain of appRouting(pads[id].root, r).domains) {
+        if (domains.has(domain))
+          fail(`domain ${domain} used by ${domains.get(domain)} and ${label}`);
+        domains.set(domain, label);
+      }
+      body += caddyRoutes(pads[id].root, id, r);
     }
   }
   return body;
