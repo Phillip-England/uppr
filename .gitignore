@@ -3,3 +3,5 @@ config/.env
 repos/
 data/
 .DS_Store
+node_modules/
+dist/
