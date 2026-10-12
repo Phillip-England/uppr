@@ -156,6 +156,22 @@ func TestGeneratedUnitsArePerAppAndCaddyRoutesUseHostPorts(t *testing.T) {
 	}
 }
 
+func TestGeneratedUnitExecutablePathsAreUnquoted(t *testing.T) {
+	m := Manifest{ID: "pad-1234"}
+	r := Repo{Name: "api"}
+	app := renderAppUnit("/home/deploy/pad", "/home/deploy/bin/uppr", "deploy", m, r)
+	if !strings.Contains(app, "ExecStart=/home/deploy/bin/uppr run-app") || strings.Contains(app, "ExecStart=\"") {
+		t.Fatalf("invalid ExecStart in app unit:\n%s", app)
+	}
+	if strings.Contains(app, "WorkingDirectory=") {
+		t.Fatalf("app unit has unnecessary WorkingDirectory:\n%s", app)
+	}
+	caddy := renderCaddyUnit("/usr/bin/caddy")
+	if !strings.Contains(caddy, "ExecStart=/usr/bin/caddy run") || !strings.Contains(caddy, "ExecReload=/usr/bin/caddy reload") {
+		t.Fatalf("invalid Caddy executable paths:\n%s", caddy)
+	}
+}
+
 func TestGlobalCaddyRejectsCrossPadConflicts(t *testing.T) {
 	root1, m1 := testPad(t)
 	m1, _ = testRepo(t, root1, m1, "api", 20000)

@@ -43,6 +43,9 @@ func installCommand() error {
 	if err != nil {
 		return errors.New("caddy is missing; run `uppr deps install`")
 	}
+	if _, err := unitExecutable(caddy); err != nil {
+		return err
+	}
 	if _, err := exec.LookPath("docker"); err != nil {
 		return errors.New("docker is missing; run `uppr deps install`")
 	}
@@ -84,6 +87,14 @@ func installCommand() error {
 	}
 	caddyUnit := filepath.Join(staging, "uppr-caddy.service")
 	if err := os.WriteFile(caddyUnit, []byte(renderCaddyUnit(caddy)), 0o644); err != nil {
+		return err
+	}
+	for _, r := range m.Repos {
+		if err := verifyUnit(filepath.Join(root, "systemd", unitName(m, r))); err != nil {
+			return err
+		}
+	}
+	if err := verifyUnit(caddyUnit); err != nil {
 		return err
 	}
 	if err := privileged("mkdir", "-p", registryDir, "/var/lib/uppr/caddy"); err != nil {
@@ -140,6 +151,9 @@ func installCommand() error {
 	if err := privileged("systemctl", "daemon-reload"); err != nil {
 		return err
 	}
+	if err := checkInstalledAppUnits(m, m.Repos); err != nil {
+		return err
+	}
 	for _, r := range m.Repos {
 		if err := privileged("systemctl", "enable", unitName(m, r)); err != nil {
 			return err
@@ -157,6 +171,14 @@ func installCommand() error {
 		return err
 	}
 	fmt.Printf("installed %d app units and refreshed shared Caddy routes\n", len(m.Repos))
+	return nil
+}
+
+func verifyUnit(path string) error {
+	output, err := exec.Command("systemd-analyze", "verify", path).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("invalid systemd unit %s: %w: %s", path, err, strings.TrimSpace(string(output)))
+	}
 	return nil
 }
 
@@ -308,5 +330,5 @@ Environment=XDG_DATA_HOME=/var/lib/uppr/caddy
 
 [Install]
 WantedBy=multi-user.target
-`, unitQuote(caddy), unitQuote(caddy))
+`, strings.ReplaceAll(caddy, "%", "%%"), strings.ReplaceAll(caddy, "%", "%%"))
 }

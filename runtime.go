@@ -61,6 +61,9 @@ func generate(root string, m Manifest) error {
 	if err != nil {
 		return err
 	}
+	if _, err := unitExecutable(exe); err != nil {
+		return err
+	}
 	account, err := user.Current()
 	if err != nil {
 		return err
@@ -94,6 +97,12 @@ func generate(root string, m Manifest) error {
 }
 
 func unitQuote(s string) string { return strconv.Quote(strings.ReplaceAll(s, "%", "%%")) }
+func unitExecutable(path string) (string, error) {
+	if !filepath.IsAbs(path) || strings.ContainsAny(path, " \t\r\n\"'\\") {
+		return "", fmt.Errorf("systemd executable path %q must be absolute and contain no whitespace, quotes, or backslashes", path)
+	}
+	return strings.ReplaceAll(path, "%", "%%"), nil
+}
 func renderAppUnit(root, exe, username string, m Manifest, r Repo) string {
 	docker, _ := exec.LookPath("docker")
 	if docker == "" {
@@ -108,7 +117,6 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=%s
-WorkingDirectory=%s
 ExecStart=%s run-app %s %s
 ExecStop=-%s stop --time 30 %s
 Restart=always
@@ -117,7 +125,7 @@ TimeoutStopSec=40
 
 [Install]
 WantedBy=multi-user.target
-`, m.ID, r.Name, username, unitQuote(root), unitQuote(exe), unitQuote(root), r.Name, unitQuote(docker), containerName(m, r))
+`, m.ID, r.Name, username, strings.ReplaceAll(exe, "%", "%%"), unitQuote(root), r.Name, strings.ReplaceAll(docker, "%", "%%"), containerName(m, r))
 }
 
 func renderCaddy(m Manifest) string {
@@ -225,6 +233,9 @@ func checkInstalledAppUnits(m Manifest, repos []Repo) error {
 			return fmt.Errorf("check service %s: %w: %s", unit, err, state)
 		}
 		if state != "loaded" {
+			if state == "bad-setting" {
+				return fmt.Errorf("service %s has invalid systemd settings; run `systemd-analyze verify %s` for details", unit, filepath.Join("/etc/systemd/system", unit))
+			}
 			return fmt.Errorf("service %s is %s; run `uppr install` before `uppr serve`", unit, state)
 		}
 	}
