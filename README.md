@@ -19,6 +19,14 @@ The Linux host also needs Git, Docker, Caddy, and systemd. `uppr deps check` rep
 ```sh
 uppr init my-pad
 cd my-pad
+uppr
+```
+
+You can also run `uppr` in a folder without a launchpad to create one through the TUI. Press `a` to add a repository. The dashboard shows each app's next setup step; select an app and press Enter to follow it through pulling, schema generation, environment setup, installation, and serving. Commands return to the dashboard so you can see the new state. On a non-Linux machine, you can prepare the app; installation and serving require the Linux host.
+
+The same flow is available through commands:
+
+```sh
 uppr add https://github.com/you/api.git --name api --domain api.example.com
 uppr pull api
 uppr schema generate api
@@ -28,7 +36,7 @@ uppr serve
 uppr list
 ```
 
-Run `uppr` with no arguments for the Ink dashboard. Use the arrow keys to select an app, then `s` to serve, `r` to restart, `x` to stop, `l` for logs, `e` to edit its schema, or `g` to generate a schema. Press `q` to exit. `uppr list` prints a readable snapshot showing each app's running state, route, ports, and checkout path, including when output is redirected.
+In the dashboard, `p` pulls, `c` configures the environment, `i` installs services, `s` serves, `r` restarts, `x` stops, `l` shows recent logs, `e` edits the schema, and `g` generates a schema. Press `?` for help or `q` to exit. The environment screen lists required and optional variables, descriptions, examples, and which values are already set. Select a variable and press Enter to edit it, then `s` to save. Existing values and unrelated entries are preserved. `uppr list` prints a readable snapshot showing each app's running state, route, ports, and checkout path, including when output is redirected.
 
 Run launchpad commands from the launchpad or any child directory. `uppr add` records a repository; `uppr pull` clones or fast forwards it into `repos/<name>`. `uppr install` generates app units and Caddy routes, enables app units, and starts or reloads Caddy. `uppr serve` builds images, starts or restarts app services, and waits for them to become ready. DNS for public domains must point to the host.
 
@@ -41,7 +49,7 @@ A root `schema.json` declares environment variables:
 ```json
 {
   "variables": [
-    {"name": "API_KEY", "description": "Upstream token", "required": true}
+    { "name": "API_KEY", "description": "Upstream token", "required": true }
   ]
 }
 ```

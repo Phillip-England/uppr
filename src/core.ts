@@ -250,6 +250,86 @@ export function appStatus(m: Manifest, r: Repo) {
             : service,
   };
 }
+export type SetupStep = {
+  label: string;
+  detail: string;
+  action?: string;
+};
+export function appSetup(
+  root: string,
+  r: Repo,
+  status: ReturnType<typeof appStatus>,
+): SetupStep {
+  const p = repoDir(root, r);
+  if (!exists(p))
+    return {
+      label: "Needs checkout",
+      detail: "Clone the repository to get started.",
+      action: "pull",
+    };
+  if (!exists(path.join(p, "Dockerfile")))
+    return {
+      label: "Needs Dockerfile",
+      detail: "Add a production Dockerfile at the repository root.",
+    };
+  const schema = schemaPath(root, r);
+  if (!exists(schema))
+    return {
+      label: "Needs schema",
+      detail: "Generate a schema from an env example, then review it.",
+      action: "schema-generate",
+    };
+  let variables: Variable[];
+  try {
+    variables = readSchema(schema).variables;
+  } catch (error) {
+    return {
+      label: "Schema error",
+      detail: error instanceof Error ? error.message : String(error),
+      action: "schema-edit",
+    };
+  }
+  const env = path.join(p, "config", ".env");
+  const values = exists(env) ? readEnv(fs.readFileSync(env, "utf8")) : {};
+  const missing = variables
+    .filter((v) => v.required !== false && !values[v.name]?.trim())
+    .map((v) => v.name);
+  if (!exists(env) || missing.length)
+    return {
+      label: "Needs environment",
+      detail: missing.length
+        ? `Set ${missing.join(", ")} in config/.env.`
+        : "Create config/.env from the schema.",
+      action: "env-setup",
+    };
+  if (status.state === "unhealthy" || status.state === "failed")
+    return {
+      label: "Needs attention",
+      detail: "Inspect the app logs for the failure.",
+      action: "logs",
+    };
+  if (process.platform !== "linux")
+    return {
+      label: "Ready for Linux",
+      detail: "Run installation and serving commands on a Linux host.",
+    };
+  if (status.service === "not installed" || status.service === "unavailable")
+    return {
+      label: "Needs install",
+      detail: "Install the launchpad's services and routes.",
+      action: "install",
+    };
+  if (status.state !== "running")
+    return {
+      label: "Ready to serve",
+      detail: "Build and start the app.",
+      action: "serve",
+    };
+  return {
+    label: "Running",
+    detail: "The app is running. Open its route or inspect logs.",
+  };
+}
 export function schemaPath(root: string, r: Repo) {
   return path.join(repoDir(root, r), "schema.json");
 }
@@ -301,18 +381,10 @@ export function setEnv(content: string, key: string, value: string) {
     : (content && !content.endsWith("\n") ? content + "\n" : content) +
         `${key}=${value}\n`;
 }
-export function protect(p: string, file: string, block: string) {
-  const target = path.join(p, file);
-  let body = exists(target) ? fs.readFileSync(target, "utf8") : "";
-  if (!body.includes(block)) {
-    if (body && !body.endsWith("\n")) body += "\n";
-    fs.writeFileSync(target, body + block);
-  }
-}
-export function prepareRepo(
+export function saveRepoEnv(
   root: string,
   r: Repo,
-  ask?: (v: Variable) => string,
+  updates: Record<string, string>,
 ) {
   const p = repoDir(root, r);
   if (!exists(path.join(p, "Dockerfile")))
@@ -324,6 +396,22 @@ export function prepareRepo(
       fail(`${r.name}: protected files tracked by Git: ${tracked.out}`);
   }
   const schema = readSchema(schemaPath(root, r));
+  const names = new Set(schema.variables.map((v) => v.name));
+  const env = path.join(p, "config", ".env");
+  let content = exists(env) ? fs.readFileSync(env, "utf8") : "";
+  for (const [name, value] of Object.entries(updates)) {
+    if (!names.has(name)) fail(`${name} is not in ${r.name}/schema.json`);
+    if (/[\r\n\0]/.test(value)) fail(`${name} contains a control character`);
+    content = setEnv(content, name, value);
+  }
+  const values = readEnv(content);
+  const missing = schema.variables
+    .filter((v) => v.required !== false && !values[v.name]?.trim())
+    .map((v) => v.name);
+  if (missing.length)
+    fail(
+      `${r.name}: required values missing in config/.env: ${missing.join(", ")}; run uppr prepare ${r.name}`,
+    );
   protect(
     p,
     ".gitignore",
@@ -338,26 +426,33 @@ export function prepareRepo(
   fs.mkdirSync(path.join(p, "data"), { recursive: true, mode: 0o700 });
   const db = path.join(p, "data", "main.sqlite");
   if (!exists(db)) fs.writeFileSync(db, "", { mode: 0o600 });
+  writeAtomic(env, content, 0o600);
+}
+export function protect(p: string, file: string, block: string) {
+  const target = path.join(p, file);
+  let body = exists(target) ? fs.readFileSync(target, "utf8") : "";
+  if (!body.includes(block)) {
+    if (body && !body.endsWith("\n")) body += "\n";
+    fs.writeFileSync(target, body + block);
+  }
+}
+export function prepareRepo(
+  root: string,
+  r: Repo,
+  ask?: (v: Variable) => string,
+) {
+  const p = repoDir(root, r);
+  const schema = readSchema(schemaPath(root, r));
   const env = path.join(p, "config", ".env");
-  let content = exists(env) ? fs.readFileSync(env, "utf8") : "";
+  const content = exists(env) ? fs.readFileSync(env, "utf8") : "";
   const values = readEnv(content);
-  const missing: string[] = [];
+  const updates: Record<string, string> = {};
   for (const v of schema.variables) {
     if (v.required === false || values[v.name]?.trim()) continue;
     const value = ask?.(v) || "";
-    if (!value) {
-      missing.push(v.name);
-      continue;
-    }
-    if (/[\r\n\0]/.test(value)) fail(`${v.name} contains a control character`);
-    content = setEnv(content, v.name, value);
+    if (value) updates[v.name] = value;
   }
-  if (missing.length)
-    fail(
-      `${r.name}: required values missing in config/.env: ${missing.join(", ")}; run uppr prepare ${r.name}`,
-    );
-  fs.writeFileSync(env, content, { mode: 0o600 });
-  fs.chmodSync(env, 0o600);
+  saveRepoEnv(root, r, updates);
 }
 export function renderCaddy(m: Manifest) {
   return (

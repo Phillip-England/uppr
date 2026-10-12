@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
+  appSetup,
   findPad,
   freePort,
   globalCaddy,
@@ -11,6 +12,7 @@ import {
   readSchema,
   renderCaddy,
   renderUnit,
+  saveRepoEnv,
   saveManifest,
   saveSchema,
   select,
@@ -49,6 +51,81 @@ test("launchpad persists, selects apps, and maps routes", () => {
     expect(
       renderUnit(root, "/usr/bin/bun", "/opt/uppr/uppr.js", "deploy", m, r),
     ).toContain("ExecStart=/usr/bin/bun /opt/uppr/uppr.js run-app");
+  } finally {
+    f.cleanup();
+  }
+});
+test("schema env setup preserves existing entries and protects secrets", () => {
+  const f = fixture();
+  try {
+    const r = {
+      name: "api",
+      url: "https://example.com/api.git",
+      domain: "api.example.com",
+      host_port: 20000,
+      container_port: 3000,
+    };
+    const repo = path.join(f.root, "repos", r.name);
+    fs.mkdirSync(repo);
+    fs.writeFileSync(path.join(repo, "Dockerfile"), "FROM scratch\n");
+    saveSchema(path.join(repo, "schema.json"), {
+      variables: [
+        { name: "API_KEY", required: true },
+        { name: "LABEL", required: false },
+      ],
+    });
+    const env = path.join(repo, "config", ".env");
+    expect(() => saveRepoEnv(f.root, r, { LABEL: "staging" })).toThrow(
+      /API_KEY/,
+    );
+    expect(fs.existsSync(env)).toBe(false);
+    saveRepoEnv(f.root, r, { API_KEY: "secret", LABEL: "staging" });
+    expect(fs.readFileSync(env, "utf8")).toContain(
+      "API_KEY=secret\nLABEL=staging\n",
+    );
+    expect(fs.statSync(env).mode & 0o777).toBe(0o600);
+    fs.appendFileSync(env, "CUSTOM=keep\n");
+    saveRepoEnv(f.root, r, { LABEL: "production" });
+    expect(fs.readFileSync(env, "utf8")).toContain("CUSTOM=keep\n");
+    expect(fs.readFileSync(env, "utf8")).toContain("LABEL=production\n");
+    expect(fs.readFileSync(env, "utf8")).toContain("API_KEY=secret\n");
+    expect(() => saveRepoEnv(f.root, r, { LABEL: "bad\nvalue" })).toThrow(
+      /control character/,
+    );
+  } finally {
+    f.cleanup();
+  }
+});
+test("setup guidance advances from checkout through environment", () => {
+  const f = fixture();
+  try {
+    const r = {
+      name: "api",
+      url: "https://example.com/api.git",
+      domain: "api.example.com",
+      host_port: 20000,
+      container_port: 3000,
+    };
+    const status = {
+      state: "not installed",
+      service: "not installed",
+      container: "—",
+      health: "—",
+    };
+    expect(appSetup(f.root, r, status).action).toBe("pull");
+    const repo = path.join(f.root, "repos", r.name);
+    fs.mkdirSync(repo);
+    expect(appSetup(f.root, r, status).label).toBe("Needs Dockerfile");
+    fs.writeFileSync(path.join(repo, "Dockerfile"), "FROM scratch\n");
+    expect(appSetup(f.root, r, status).action).toBe("schema-generate");
+    saveSchema(path.join(repo, "schema.json"), {
+      variables: [{ name: "API_KEY" }],
+    });
+    expect(appSetup(f.root, r, status).action).toBe("env-setup");
+    saveRepoEnv(f.root, r, { API_KEY: "secret" });
+    expect(appSetup(f.root, r, status).action).toBe(
+      process.platform === "linux" ? "install" : undefined,
+    );
   } finally {
     f.cleanup();
   }

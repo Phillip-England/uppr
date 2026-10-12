@@ -768,13 +768,18 @@ export async function command(argv: string[]) {
   }
   if (cmd === "logs") {
     linux();
-    only(args, 1, "uppr logs <name>");
+    if (
+      args.length < 1 ||
+      args.length > 2 ||
+      (args.length === 2 && args[1] !== "--no-follow")
+    )
+      fail("usage: uppr logs <name> [--no-follow]");
     run("journalctl", [
       "-u",
       unitName(m, select(m, args[0])[0]),
       "-n",
       "200",
-      "-f",
+      ...(args[1] === "--no-follow" ? ["--no-pager"] : ["-f"]),
     ]);
     return;
   }
