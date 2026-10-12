@@ -804,6 +804,61 @@ export async function showInitPad() {
   await app.waitUntilExit();
   return directory;
 }
+function CurlPath({
+  name,
+  onDone,
+}: {
+  name: string;
+  onDone: (route: string) => void;
+}) {
+  const { exit } = useApp();
+  const [route, setRoute] = useState("");
+  const [message, setMessage] = useState("");
+  useInput((input, key) => {
+    if (key.escape) return exit();
+    if (key.return) {
+      const value = route.trim() || "/";
+      if (!value.startsWith("/")) {
+        setMessage("Request path must start with /.");
+        return;
+      }
+      onDone(value);
+      exit();
+    } else if (key.ctrl && input === "u") setRoute("");
+    else if (key.backspace || key.delete)
+      setRoute((old) => old.slice(0, -1));
+    else if (!key.ctrl && !key.meta && input && !/[\r\n\0]/.test(input)) {
+      setRoute((old) => old + input);
+      setMessage("");
+    }
+  });
+  return (
+    <Box flexDirection="column" paddingX={1}>
+      <Text color={C.purple} bold>
+        ◈ UPPR / curl {name}
+      </Text>
+      <Text color={C.muted}>Request path</Text>
+      <Box borderStyle="round" borderColor={C.cyan} paddingX={1}>
+        <Text color={C.white}>{route}▌</Text>
+      </Box>
+      <Text color={C.muted}>Enter send · Ctrl+U clear · Esc cancel</Text>
+      {message && <Text color={C.red}>{message}</Text>}
+    </Box>
+  );
+}
+export async function showCurlPath(name: string): Promise<string | null> {
+  let route: string | null = null;
+  const app = render(
+    <CurlPath
+      name={name}
+      onDone={(value) => {
+        route = value;
+      }}
+    />,
+  );
+  await app.waitUntilExit();
+  return route;
+}
 function ContinueScreen({
   title,
   detail,

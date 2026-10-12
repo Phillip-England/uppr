@@ -146,6 +146,7 @@ function buildApp(root: string, m: Manifest, r: Repo) {
 }
 async function ready(m: Manifest, r: Repo) {
   let observed = false;
+  console.log(`Waiting for ${r.name} to become ready...`);
   for (let n = 0; n < 60; n++) {
     const p = probe("docker", [
       "inspect",
@@ -166,6 +167,8 @@ async function ready(m: Manifest, r: Repo) {
       if (state === "exited" || state === "dead" || health === "unhealthy")
         fail(`${r.name} failed to become ready; run uppr logs ${r.name}`);
     }
+    if (n > 0 && n % 5 === 0)
+      console.log(`Still waiting for ${r.name} (${n * 2}s)...`);
     await Bun.sleep(2000);
   }
   fail(
@@ -194,6 +197,7 @@ function verifyUnit(p: string) {
 }
 async function installHost(root: string, m: Manifest) {
   linux();
+  console.log("Checking host and preparing app configuration...");
   if (active("caddy.service") && !active("uppr-caddy.service"))
     fail(
       "caddy.service is active; stop it before installing uppr-caddy.service",
@@ -206,8 +210,10 @@ async function installHost(root: string, m: Manifest) {
   const pads = readRegistry();
   pads[m.id] = { id: m.id, root };
   const body = globalCaddy(pads);
+  console.log("Validating Caddy routes and app services...");
   validateCaddy(body);
   for (const r of m.repos) {
+    console.log(`Checking ${r.name}...`);
     verifyUnit(path.join(root, "systemd", unitName(m, r)));
     if (!active(unitName(m, r))) await checkFreePort(r);
   }
@@ -220,6 +226,7 @@ async function installHost(root: string, m: Manifest) {
     fs.writeFileSync(reg, JSON.stringify(pads[m.id], null, 2) + "\n");
     fs.writeFileSync(caddyUnit, renderCaddyUnit(caddy));
     verifyUnit(caddyUnit);
+    console.log("Installing systemd units and Caddy routes...");
     privileged("mkdir", ["-p", registryDir, "/var/lib/uppr/caddy"]);
     const old = exists(unitDir)
       ? fs
@@ -266,12 +273,14 @@ async function installHost(root: string, m: Manifest) {
       caddyUnit,
       path.join(unitDir, "uppr-caddy.service"),
     ]);
+    console.log("Reloading systemd and enabling services...");
     privileged("systemctl", ["daemon-reload"]);
     requireInstalled(m, m.repos);
     for (const r of m.repos)
       privileged("systemctl", ["enable", unitName(m, r)]);
     for (const name of changed) privileged("systemctl", ["restart", name]);
     privileged("systemctl", ["enable", "uppr-caddy.service"]);
+    console.log("Starting or reloading Caddy...");
     privileged("systemctl", ["reload-or-restart", "uppr-caddy.service"]);
     console.log(
       `installed ${m.repos.length} app units and refreshed shared Caddy routes`,
@@ -705,6 +714,7 @@ export async function command(argv: string[]) {
       url,
     ];
     console.log("$ curl", curlArgs.map(shellQuote).join(" "));
+    console.error(`Waiting for response from ${r.name}...`);
     run("curl", curlArgs);
     return;
   }
@@ -765,11 +775,13 @@ export async function command(argv: string[]) {
       name = args[1];
     } else if (args.length > 2) fail("usage: uppr serve [path] [name]");
     const repos = select(targetM, name);
+    console.log("Checking services and Docker...");
     requireInstalled(targetM, repos);
     dockerAccess();
     buildx();
     const changed = new Map<string, boolean>();
     for (const r of repos) {
+      console.log(`Building ${r.name}...`);
       const before = imageId(targetM, r);
       buildApp(targetRoot, targetM, r);
       const after = imageId(targetM, r);
@@ -788,6 +800,7 @@ export async function command(argv: string[]) {
         console.log("unchanged", r.name);
         continue;
       }
+      console.log(`${action}ing ${r.name} service...`);
       privileged("systemctl", [action, unitName(targetM, r)]);
     }
     for (const r of repos) await ready(targetM, r);
@@ -868,6 +881,7 @@ async function backup(root: string, m: Manifest, dest: string) {
   dest = path.resolve(dest);
   if (dest === root || dest.startsWith(root + path.sep))
     fail("backup archive must be outside the launchpad");
+  console.log("Preparing backup...");
   const stopped: string[] = [];
   try {
     if (process.platform === "linux") {
@@ -876,6 +890,7 @@ async function backup(root: string, m: Manifest, dest: string) {
       for (const r of m.repos) {
         const name = unitName(m, r);
         if (active(name)) {
+          console.log(`Stopping ${r.name} for backup...`);
           privileged("systemctl", ["stop", name]);
           stopped.push(name);
         }
@@ -887,6 +902,7 @@ async function backup(root: string, m: Manifest, dest: string) {
     fs.mkdirSync(path.dirname(dest), { recursive: true });
     const tmp = dest + ".tmp-" + process.pid;
     try {
+      console.log("Checking files and creating archive...");
       checkArchiveLinks(root, root);
       await tar.c({ gzip: true, file: tmp, cwd: root }, ["."]);
       fs.renameSync(tmp, dest);
@@ -895,7 +911,10 @@ async function backup(root: string, m: Manifest, dest: string) {
     }
     console.log("wrote", dest);
   } finally {
-    for (const name of stopped) privileged("systemctl", ["start", name]);
+    for (const name of stopped) {
+      console.log(`Restarting ${name}...`);
+      privileged("systemctl", ["start", name]);
+    }
   }
 }
 function checkArchiveLinks(root: string, dir: string) {
@@ -915,6 +934,7 @@ async function restore(archive: string, dest: string) {
   if (exists(dest)) fail(`destination ${dest} already exists`);
   const stage = fs.mkdtempSync(path.join(path.dirname(dest), ".uppr-restore-"));
   try {
+    console.log("Extracting and checking backup archive...");
     await tar.x({
       file: path.resolve(archive),
       cwd: stage,

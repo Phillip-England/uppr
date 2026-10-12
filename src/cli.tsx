@@ -1,12 +1,12 @@
 #!/usr/bin/env bun
 import path from "node:path";
-import { createInterface } from "node:readline/promises";
 import { command, help } from "./commands.ts";
 import { findPad, unitName } from "./core.ts";
 import { startOperation } from "./restart-jobs.ts";
 import {
   showAddApp,
   showContinue,
+  showCurlPath,
   showDashboard,
   showEnvSetup,
   showHelp,
@@ -94,21 +94,9 @@ try {
       }
       try {
         if (a.kind === "curl") {
-          const input = createInterface({
-            input: process.stdin,
-            output: process.stdout,
-          });
-          let route: string;
-          try {
-            route =
-              (
-                await input.question(`Request path for ${a.name} [/]: `)
-              ).trim() || "/";
-          } finally {
-            input.close();
-          }
-          if (!route.startsWith("/"))
-            throw new Error("request path must start with /");
+          const route = await showCurlPath(a.name!);
+          if (route === null) continue;
+          clearScreen();
           await command(["curl", a.name!, route]);
           await showContinue("Request complete");
           continue;
@@ -133,6 +121,7 @@ try {
           argv = ["schema", "generate", a.name!];
         else if (a.kind === "logs") argv = ["logs", a.name!, "--no-follow"];
         else argv = a.name ? [a.kind, a.name] : [a.kind];
+        console.log(`Running ${argv.join(" ")}...`);
         await command(argv);
         await showContinue(
           a.kind === "add" ? "App added" : "Action complete",
