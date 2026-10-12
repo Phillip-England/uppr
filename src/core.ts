@@ -514,8 +514,7 @@ export function renderUnit(
   return `[Unit]\nDescription=Uppr ${m.id} / ${r.name}\nRequires=docker.service\nAfter=docker.service network-online.target\nWants=network-online.target\n\n[Service]\nType=simple\nUser=${user}\nExecStart=${unitExe(bun)} ${unitExe(cli)} run-app ${unitQuote(root)} ${r.name}\nExecStop=-${docker} stop --time 30 ${containerName(m, r)}\nRestart=always\nRestartSec=5\nTimeoutStopSec=40\n\n[Install]\nWantedBy=multi-user.target\n`;
 }
 export function generate(root: string, m: Manifest) {
-  const bun = which("bun");
-  if (!bun) fail("bun is missing from PATH");
+  const bun = process.execPath;
   const cli = path.resolve(process.argv[1]);
   const user = os.userInfo().username;
   const dir = path.join(root, "systemd");

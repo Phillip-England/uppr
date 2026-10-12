@@ -6,7 +6,9 @@ install:
 	bun run build
 	mkdir -p "$(PREFIX)/bin" "$(PREFIX)/share/uppr"
 	install -m 0644 dist/uppr.js "$(PREFIX)/share/uppr/uppr.js"
-	printf '%s\n' '#!/bin/sh' 'exec bun "$(PREFIX)/share/uppr/uppr.js" "$$@"' > "$(PREFIX)/bin/uppr"
+	@bun_path="$$(command -v bun)"; \
+	  case "$$bun_path" in /*) ;; *) echo "bun must resolve to an absolute path" >&2; exit 1;; esac; \
+	  printf '#!/bin/sh\nexec "%s" "%s/share/uppr/uppr.js" "$$@"\n' "$$bun_path" "$(PREFIX)" > "$(PREFIX)/bin/uppr"
 	chmod 0755 "$(PREFIX)/bin/uppr"
 	@echo "Installed $(PREFIX)/bin/uppr; add $(PREFIX)/bin to PATH if needed."
 

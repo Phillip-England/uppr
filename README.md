@@ -10,7 +10,7 @@ Bun must already be installed on the target host. From this repository:
 make install
 ```
 
-This builds a bundled Bun entry point at `~/.local/share/uppr/uppr.js` and installs `~/.local/bin/uppr`. Add `~/.local/bin` to `PATH` if needed. Set `PREFIX=/some/path` to install elsewhere. Run `make install` again after updating Uppr, then run `uppr generate` and `uppr install` in each installed launchpad so systemd units use the installed path.
+This builds a bundled Bun entry point at `~/.local/share/uppr/uppr.js` and installs `~/.local/bin/uppr`. The launcher records Bun's absolute path so systemd does not need Bun on its `PATH`. Add `~/.local/bin` to `PATH` if needed. Set `PREFIX=/some/path` to install elsewhere. Run `make install` again after updating Uppr, then run `uppr install` in each installed launchpad to refresh its systemd units.
 
 The Linux host also needs Git, Docker, Caddy, and systemd. `uppr deps check` reports missing tools. `uppr deps install` installs Git, Docker, and Caddy with apt or dnf. The account running Uppr needs Docker access; do not run `sudo uppr serve` because the app services run as the account that installed them. Uppr invokes `sudo` for host installation and service control when required.
 

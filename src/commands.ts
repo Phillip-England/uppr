@@ -338,7 +338,7 @@ function git(root: string, args: string[]) {
       const helper = path.join(dir, "askpass.sh");
       fs.writeFileSync(
         helper,
-        `#!/bin/sh\nexec bun ${shellQuote(path.resolve(process.argv[1]))} askpass "$@"\n`,
+        `#!/bin/sh\nexec ${shellQuote(process.execPath)} ${shellQuote(path.resolve(process.argv[1]))} askpass "$@"\n`,
         { mode: 0o700 },
       );
       env = {
@@ -525,7 +525,7 @@ export async function command(argv: string[]) {
     if (args[0] === "check") {
       let missing = false;
       for (const tool of ["git", "docker", "caddy", "systemctl", "bun"]) {
-        const found = !!which(tool);
+        const found = tool === "bun" ? exists(process.execPath) : !!which(tool);
         console.log(found ? "OK" : "MISSING", tool);
         missing ||= !found;
       }
@@ -786,7 +786,7 @@ export async function command(argv: string[]) {
   if (cmd === "doctor") {
     let bad = false;
     for (const tool of ["git", "docker", "caddy", "bun"]) {
-      const ok = !!which(tool);
+      const ok = tool === "bun" ? exists(process.execPath) : !!which(tool);
       console.log(ok ? "OK" : "MISSING", tool);
       bad ||= !ok;
     }
