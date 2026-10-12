@@ -40,7 +40,7 @@ In the dashboard, `p` pulls the selected repo, `P` pulls all repos, `s` launches
 
 Run launchpad commands from the launchpad or any child directory. `uppr add` records a repository; `uppr pull <name>` clones or fast forwards one checkout into `repos/<name>`, and `uppr pull --all` updates every checkout. Pulling never starts an app. `uppr install` generates app units and Caddy routes, enables app units, and starts or reloads Caddy. `uppr launch <name>` builds and starts one app from its current checkout; `uppr launch --all` does this for every repo. Launching never pulls from Git. `uppr serve` remains available as an alias for the existing launch behavior. DNS for public domains must point to the host.
 
-Use `uppr curl api /health` to call an app through its local port, or pass normal curl options after the path, such as `uppr curl api /items -X POST -H 'Content-Type: application/json' -d '{"name":"example"}'`. Uppr prints the full curl command before streaming headers and response output. Use `uppr caddyfile` to print the Caddyfile generated from the current launchpad manifest without changing files. `uppr generate` writes that file to disk.
+Use `uppr curl api /health` to call an app through its local port, or pass normal curl options after the path, such as `uppr curl api /items -X POST -H 'Content-Type: application/json' -d '{"name":"example"}'`. Uppr prints the full curl command before streaming headers and response output. Use `uppr caddyfile` to print the Caddyfile generated from the current launchpad manifest and app schemas without changing files. `uppr generate` writes that file to disk.
 
 ## Application contract and schema
 
@@ -57,6 +57,8 @@ A root `schema.json` declares environment variables:
 ```
 
 A variable is required unless `"required": false` is set. To create or change a schema:
+
+If the app declares `PORT`, Uppr uses its value from `config/.env` as the container's listening port. When `PORT` is unset, its numeric schema `example` is used. A declared `PORT` needs one of these values. For example, `{"name":"PORT","example":"8839","required":false}` publishes the container's port 8839 unless `config/.env` overrides it. Caddy still proxies to the host port assigned by `uppr add`; Docker maps that host port to the app port. Apps without a `PORT` schema variable use the `--container-port` value from `uppr add` (default 3000). After changing `PORT`, run `uppr install` to refresh a running container's port mapping.
 
 ```sh
 uppr schema generate api               # reads .env.example, .env.sample, or .env.template

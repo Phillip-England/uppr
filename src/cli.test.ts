@@ -152,6 +152,68 @@ test("curl shows its request and response, and caddyfile is readable without gen
   }
 });
 
+test("run-app publishes the PORT selected by schema and env", () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "uppr-port-test-"));
+  const root = path.join(base, "pad");
+  try {
+    expect(cli(base, "init", root).status).toBe(0);
+    expect(
+      cli(root, "add", "https://example.com/api.git", "--name", "api").status,
+    ).toBe(0);
+    const repo = path.join(root, "repos", "api");
+    fs.mkdirSync(path.join(repo, "config"), { recursive: true });
+    fs.writeFileSync(path.join(repo, "Dockerfile"), "FROM scratch\n");
+    fs.writeFileSync(
+      path.join(repo, "schema.json"),
+      '{"variables":[{"name":"PORT","example":"8839","required":false}]}\n',
+    );
+    fs.writeFileSync(path.join(repo, "config", ".env"), "PORT=8840\n");
+    const bin = path.join(base, "bin"),
+      args = path.join(base, "docker-args");
+    fs.mkdirSync(bin);
+    fs.writeFileSync(
+      path.join(bin, "docker"),
+      '#!/bin/sh\nprintf "%s\\n" "$@" > "$UPPR_TEST_DOCKER_ARGS"\n',
+      { mode: 0o700 },
+    );
+    const result = spawnSync(
+      "bun",
+      [path.resolve(import.meta.dir, "cli.tsx"), "run-app", root, "api"],
+      {
+        cwd: root,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          PATH: `${bin}:${process.env.PATH}`,
+          UPPR_TEST_DOCKER_ARGS: args,
+        },
+      },
+    );
+    expect(result.status).toBe(0);
+    expect(fs.readFileSync(args, "utf8")).toContain("127.0.0.1:20000:8840");
+    expect(fs.readFileSync(args, "utf8")).toContain("PORT=8840");
+    fs.writeFileSync(path.join(repo, "config", ".env"), "");
+    const fallback = spawnSync(
+      "bun",
+      [path.resolve(import.meta.dir, "cli.tsx"), "run-app", root, "api"],
+      {
+        cwd: root,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          PATH: `${bin}:${process.env.PATH}`,
+          UPPR_TEST_DOCKER_ARGS: args,
+        },
+      },
+    );
+    expect(fallback.status).toBe(0);
+    expect(fs.readFileSync(args, "utf8")).toContain("127.0.0.1:20000:8839");
+    expect(fs.readFileSync(args, "utf8")).toContain("PORT=8839");
+  } finally {
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+});
+
 test("pull --all updates all checkouts and pull <name> updates only one", () => {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), "uppr-pull-test-"));
   const root = path.join(base, "pad");

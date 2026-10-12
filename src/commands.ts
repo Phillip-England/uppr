@@ -8,6 +8,7 @@ import {
   appStatus,
   active,
   containerName,
+  containerPort,
   envName,
   exists,
   fail,
@@ -241,8 +242,13 @@ async function installHost(root: string, m: Manifest) {
         dst = path.join(unitDir, name);
       if (
         active(name) &&
-        exists(dst) &&
-        fs.readFileSync(dst, "utf8") !== fs.readFileSync(src, "utf8")
+        ((exists(dst) &&
+          fs.readFileSync(dst, "utf8") !== fs.readFileSync(src, "utf8")) ||
+          !probe("docker", [
+            "port",
+            containerName(m, r),
+            `${containerPort(root, r)}/tcp`,
+          ]).out.includes(`127.0.0.1:${r.host_port}`))
       )
         changed.push(name);
       privileged("install", ["-m", "0644", src, dst]);
@@ -581,6 +587,12 @@ export async function command(argv: string[]) {
       r = select(man, args[1])[0];
     prepareRepo(pad, r);
     const p = repoDir(pad, r);
+    const appPort = containerPort(pad, r);
+    const portEnv = readSchema(schemaPath(pad, r)).variables.some(
+      (v) => v.name === "PORT",
+    )
+      ? ["--env", `PORT=${appPort}`]
+      : [];
     await import("./core.ts").then((x) =>
       x.spawnWait("docker", [
         "run",
@@ -588,9 +600,10 @@ export async function command(argv: string[]) {
         "--name",
         containerName(man, r),
         "--publish",
-        `127.0.0.1:${r.host_port}:${r.container_port}`,
+        `127.0.0.1:${r.host_port}:${appPort}`,
         "--env-file",
         path.join(p, "config", ".env"),
+        ...portEnv,
         "--mount",
         `type=bind,src=${path.join(p, "config")},dst=/app/config`,
         "--mount",
@@ -674,7 +687,7 @@ export async function command(argv: string[]) {
   }
   if (cmd === "caddyfile") {
     only(args, 0, "uppr caddyfile");
-    process.stdout.write(renderCaddy(m));
+    process.stdout.write(renderCaddy(root, m));
     return;
   }
   if (cmd === "curl") {
@@ -792,7 +805,7 @@ export async function command(argv: string[]) {
     for (const r of select(m, args[0])) {
       const s = appStatus(m, r);
       console.log(
-        `${r.name}: ${s.state} | service ${s.service} | container ${s.container} | health ${s.health} | https://${r.domain} → 127.0.0.1:${r.host_port} → ${r.container_port}`,
+        `${r.name}: ${s.state} | service ${s.service} | container ${s.container} | health ${s.health} | https://${r.domain} → 127.0.0.1:${r.host_port} → ${containerPort(root, r)}`,
       );
     }
     return;

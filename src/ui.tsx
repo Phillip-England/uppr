@@ -6,6 +6,7 @@ import { restartJob, subscribeRestartJobs } from "./restart-jobs.ts";
 import {
   appStatus,
   appSetup,
+  containerPort,
   findPad,
   repoDir,
   readEnv,
@@ -27,6 +28,13 @@ type Entry = {
   status: ReturnType<typeof appStatus>;
   setup: SetupStep;
 };
+function displayedContainerPort(root: string, r: Repo) {
+  try {
+    return String(containerPort(root, r));
+  } catch {
+    return "?";
+  }
+}
 const C = {
   purple: "#B598F2",
   cyan: "#6EE7DD",
@@ -157,7 +165,7 @@ function Board({
                 <Text color={C.muted}>
                   {" "}
                   Internal: 127.0.0.1:{r.host_port} → container :
-                  {r.container_port} · Files: {repoDir(root, r)}
+                  {displayedContainerPort(root, r)} · Files: {repoDir(root, r)}
                 </Text>
               )}
             </Box>
@@ -190,7 +198,7 @@ function Board({
           )}
           <Text color={C.muted}>
             Internal: 127.0.0.1:{active.repo.host_port} → container :
-            {active.repo.container_port}
+            {displayedContainerPort(root, active.repo)}
           </Text>
           {active.status.health !== "—" && (
             <Text color={C.muted}>

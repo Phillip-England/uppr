@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import {
   appSetup,
+  containerPort,
   findPad,
   freePort,
   globalCaddy,
@@ -46,11 +47,37 @@ test("launchpad persists, selects apps, and maps routes", () => {
     expect(root).toBe(f.root);
     expect(select(m, "api")[0]).toEqual(r);
     expect(freePort(m)).toBe(20001);
-    expect(renderCaddy(m)).toContain("reverse_proxy 127.0.0.1:20000");
+    expect(renderCaddy(root, m)).toContain("reverse_proxy 127.0.0.1:20000");
     expect(unitName(m, r)).toContain("api.service");
     expect(
       renderUnit(root, "/usr/bin/bun", "/opt/uppr/uppr.js", "deploy", m, r),
     ).toContain("ExecStart=/usr/bin/bun /opt/uppr/uppr.js run-app");
+  } finally {
+    f.cleanup();
+  }
+});
+test("schema PORT controls the published container port", () => {
+  const f = fixture();
+  try {
+    const r = {
+      name: "api",
+      url: "https://example.com/api.git",
+      domain: "api.example.com",
+      host_port: 20000,
+      container_port: 3000,
+    };
+    f.m.repos.push(r);
+    const repo = path.join(f.root, "repos", r.name);
+    fs.mkdirSync(path.join(repo, "config"), { recursive: true });
+    saveSchema(path.join(repo, "schema.json"), {
+      variables: [{ name: "PORT", required: false, example: "8839" }],
+    });
+    expect(containerPort(f.root, r)).toBe(8839);
+    fs.writeFileSync(path.join(repo, "config", ".env"), "PORT=8840\n");
+    expect(containerPort(f.root, r)).toBe(8840);
+    expect(renderCaddy(f.root, f.m)).toContain("reverse_proxy 127.0.0.1:20000");
+    fs.writeFileSync(path.join(repo, "config", ".env"), "PORT=wrong\n");
+    expect(() => containerPort(f.root, r)).toThrow(/PORT must be an integer/);
   } finally {
     f.cleanup();
   }
