@@ -89,6 +89,19 @@ func TestPrepareRejectsTrackedRuntimeState(t *testing.T) {
 	}
 }
 
+func TestDockerSocketPermissionErrorGivesRepairSteps(t *testing.T) {
+	bin := t.TempDir()
+	docker := filepath.Join(bin, "docker")
+	if err := os.WriteFile(docker, []byte("#!/bin/sh\necho 'permission denied while trying to connect to the docker API at unix:///var/run/docker.sock' >&2\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	err := checkDockerAccess()
+	if err == nil || !strings.Contains(err.Error(), "usermod -aG docker") || !strings.Contains(err.Error(), "sign out and back in") {
+		t.Fatalf("expected actionable Docker socket error, got %v", err)
+	}
+}
+
 func TestGeneratedUnitsArePerAppAndCaddyRoutesUseHostPorts(t *testing.T) {
 	root, m := testPad(t)
 	m, _ = testRepo(t, root, m, "api", 20000)

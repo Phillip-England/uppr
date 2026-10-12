@@ -130,6 +130,9 @@ func renderCaddy(m Manifest) string {
 }
 
 func buildApp(root string, m Manifest, r Repo) error {
+	if err := checkDockerAccess(); err != nil {
+		return err
+	}
 	if err := prepareRepo(root, r, false); err != nil {
 		return err
 	}
@@ -138,6 +141,25 @@ func buildApp(root string, m Manifest, r Repo) error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
+}
+
+func checkDockerAccess() error {
+	if _, err := exec.LookPath("docker"); err != nil {
+		return errors.New("docker is missing; run `uppr deps install`")
+	}
+	output, err := exec.Command("docker", "info", "--format", "{{.ServerVersion}}").CombinedOutput()
+	if err == nil {
+		return nil
+	}
+	message := strings.TrimSpace(string(output))
+	if strings.Contains(strings.ToLower(message), "permission denied") && strings.Contains(message, "docker.sock") {
+		account, userErr := user.Current()
+		if userErr != nil {
+			return fmt.Errorf("Docker socket access denied; add the account running Uppr to the docker group, then sign out and back in: %s", message)
+		}
+		return fmt.Errorf("Docker socket access denied for %s; run `sudo usermod -aG docker %s`, sign out and back in, then run `docker info` and `uppr serve` again (the docker group grants root-level access)", account.Username, account.Username)
+	}
+	return fmt.Errorf("Docker daemon unavailable: %s; check `systemctl status docker`", message)
 }
 
 func imageID(m Manifest, r Repo) string {
@@ -385,8 +407,12 @@ func doctorCommand() error {
 		}
 	}
 	if _, err := exec.LookPath("docker"); err == nil {
-		if output, err := exec.Command("docker", "info", "--format", "{{.ServerVersion}}").CombinedOutput(); err != nil {
-			fmt.Printf("DOCKER unavailable: %s\n", strings.TrimSpace(string(output)))
+		if err := checkDockerAccess(); err != nil {
+			fmt.Printf("DOCKER unavailable: %v\n", err)
+			failed = true
+		}
+		if output, err := exec.Command("docker", "buildx", "version").CombinedOutput(); err != nil {
+			fmt.Printf("BUILDX unavailable: %s; install Ubuntu's `docker-buildx` package or Docker's `docker-buildx-plugin` package\n", strings.TrimSpace(string(output)))
 			failed = true
 		}
 	}
@@ -440,7 +466,7 @@ func depsCommand(args []string) error {
 		return err
 	}
 	if _, err := exec.LookPath("apt-get"); err == nil {
-		if err := privileged("apt-get", "install", "-y", "git", "docker.io", "caddy"); err != nil {
+		if err := privileged("apt-get", "install", "-y", "git", "docker.io", "docker-buildx", "caddy"); err != nil {
 			return err
 		}
 		return privileged("systemctl", "enable", "--now", "docker.service")

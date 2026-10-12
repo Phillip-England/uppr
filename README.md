@@ -14,7 +14,20 @@ To install the CLI directly with Go, run `go install .`. This places the executa
 
 Put the binary at a stable, absolute path on the Linux host, such as `~/.local/bin/uppr`, and add it to `PATH`. Generated app units record the binary's absolute path and the account that ran `uppr generate` or `uppr install`. Run those commands as the account that should own and operate the app files, and run `uppr install` again after moving the binary or launchpad.
 
-The host needs Git, Docker, Caddy, and systemd. The account that installs and runs the app units needs Docker access. `uppr deps check` reports missing tools; `uppr deps install` attempts to install Git, Docker, and Caddy with `apt-get` or `dnf` on Linux and starts Docker. Installation and service actions use `sudo` for privileged commands when needed. Caddy needs ports 80 and 443, so stop any other service using them before installing Uppr's shared Caddy service.
+The host needs Git, Docker, Caddy, and systemd. The account that installs and runs the app units needs Docker access. `uppr deps check` reports missing tools; `uppr deps install` attempts to install Git, Docker, and Caddy with `apt-get` or `dnf` on Linux and starts Docker. On Ubuntu it also installs the `docker-buildx` package for BuildKit builds. Installation and service actions use `sudo` for privileged commands when needed. Caddy needs ports 80 and 443, so stop any other service using them before installing Uppr's shared Caddy service.
+
+If `uppr serve` reports permission denied for `/var/run/docker.sock`, give the deployment account Docker access and start a fresh login session. For an account named `deploy`:
+
+```sh
+sudo usermod -aG docker deploy
+# Disconnect from SSH, then reconnect as deploy.
+docker info
+uppr serve
+```
+
+The Docker group grants root-level access, so grant it only to an account you trust. Do not run `sudo uppr serve`: the generated app units use the account that ran `uppr install`, and runtime files should stay owned by that account. If `docker info` still fails, check `sudo systemctl status docker` and run `uppr doctor` for details.
+
+The `DEPRECATED: The legacy builder is deprecated` message means Buildx is missing; it is separate from the socket permission failure. If Docker came from Ubuntu's `docker.io` package, install `sudo apt-get install docker-buildx`. If Docker came from Docker's official apt repository, install `sudo apt-get install docker-buildx-plugin` instead. Confirm with `docker buildx version`.
 
 You can build, initialize launchpads, manage Git repositories, prepare environments, generate files, and restore backups on other operating systems. Installing and controlling services requires Linux and systemd.
 
@@ -36,7 +49,7 @@ Replace the example repository URLs and domains with your own.
 
 Run launchpad commands from its directory or a child directory. `uppr init` creates `launchpad.json`, `repos/`, `systemd/`, a Caddyfile, and a `.gitignore`. `uppr add` records a repository in the manifest; `uppr pull` clones it into `repos/<name>/` or fast-forwards an existing checkout. Each app repository must have a root `Dockerfile` and `schema.json` before `uppr prepare` or `uppr install` can succeed. See [Application contract](#application-contract).
 
-`uppr prepare` creates `config/.env` and `data/main.sqlite` in each app checkout and prompts for required schema variables when run interactively. It preserves existing environment values. `uppr doctor` checks Git, Docker, Caddy, Docker daemon access, and each app's preparation state; its preparation check may create local files. It does not install services.
+`uppr prepare` creates `config/.env` and `data/main.sqlite` in each app checkout and prompts for required schema variables when run interactively. It preserves existing environment values. `uppr doctor` checks Git, Docker, Caddy, Docker daemon access, Buildx, and each app's preparation state; its preparation check may create local files. It does not install services.
 
 `uppr install` generates local app units and a Caddyfile, validates the combined routes, installs the units, and starts or reloads the shared Caddy service. It **enables but does not start the app units**. `uppr serve` builds the app images, starts or restarts their units as needed, and waits for the containers to be running or healthy. DNS for public domains must point to the host. You can run `uppr generate` separately to inspect the generated `systemd/` files and Caddyfile before installation; `uppr install` also generates them.
 
