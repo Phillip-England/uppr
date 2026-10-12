@@ -8,7 +8,7 @@ import {
   subscribeRestartJobs,
 } from "./restart-jobs.ts";
 
-test("restart output is observable only while its job is active", async () => {
+test("operation output remains observable after its job completes", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "uppr-restart-test-"));
   const entry = path.join(root, "restart.ts");
   fs.writeFileSync(
@@ -49,7 +49,8 @@ test("restart output is observable only while its job is active", async () => {
       });
     }
     expect(restartJob(root, "api")?.state).toBe("succeeded");
-    expect(restartJob(root, "api")?.lines).toEqual([]);
+    expect(restartJob(root, "api")?.lines).toContain("build started");
+    expect(restartJob(root, "api")?.lines).toContain("ready");
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

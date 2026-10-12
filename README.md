@@ -12,7 +12,7 @@ make install
 
 This builds a bundled Bun entry point at `~/.local/share/uppr/uppr.js` and installs `~/.local/bin/uppr`. The launcher records Bun's absolute path so systemd does not need Bun on its `PATH`. Add `~/.local/bin` to `PATH` if needed. Set `PREFIX=/some/path` to install elsewhere. Run `make install` again after updating Uppr, then run `uppr install` in each installed launchpad to refresh its systemd units.
 
-The Linux host also needs Git, Docker, Caddy, and systemd. `uppr deps check` reports missing tools. `uppr deps install` installs Git, Docker, and Caddy with apt or dnf. The account running Uppr needs Docker access; do not run `sudo uppr serve` because the app services run as the account that installed them. Uppr invokes `sudo` for host installation and service control when required.
+The Linux host also needs Git, Docker, Caddy, and systemd. `uppr deps check` reports missing tools. `uppr deps install` installs Git, Docker, and Caddy with apt or dnf. The account running Uppr needs Docker access; run `uppr launch` as that account because the app services run as the account that installed them. Uppr invokes `sudo` for host installation and service control when required.
 
 ## Get started
 
@@ -32,13 +32,15 @@ uppr pull api
 uppr schema generate api
 uppr prepare api
 uppr install
-uppr serve
+uppr launch api
 uppr list
 ```
 
-In the dashboard, `p` pulls, `c` configures the environment, `i` installs services, `s` serves, `r` restarts, `x` stops, `l` shows recent logs, `e` edits the schema, and `g` generates a schema. A TUI restart runs in the background and shows `restarting` beside the app. Press `o` on that app to observe its current restart and service output; `o` is available only while the restart is active. Press `q` or Esc to return to the dashboard. Observation output is held in a small memory buffer and cleared when the restart ends. Background restarts require noninteractive sudo access if service control needs sudo. Press `?` for help or `q` to exit. The environment screen lists required and optional variables, descriptions, examples, and which values are already set. Select a variable and press Enter to edit it, then `s` to save. Existing values and unrelated entries are preserved. `uppr list` prints a readable snapshot showing each app's running state, route, ports, and checkout path, including when output is redirected.
+In the dashboard, `p` pulls the selected repo, `P` pulls all repos, `s` launches the selected repo, and `A` launches all repos. `u` prompts for a request path and curls the selected repo; `v` shows the launchpad Caddyfile. `c` configures the environment, `i` installs services, `r` restarts, `x` stops, `l` shows recent logs, `e` edits the schema, and `g` generates a schema. Pulls, launches, and restarts run in the background. Press `o` to view their output, then `q` or Esc to return to the dashboard while the operation continues. The viewer keeps the last 200 output lines after completion until another operation replaces them. Background service operations require noninteractive sudo access if service control needs sudo. Press `?` for help or `q` to exit. The environment screen lists required and optional variables, descriptions, examples, and which values are already set. Select a variable and press Enter to edit it, then `s` to save. Existing values and unrelated entries are preserved. `uppr list` prints a readable snapshot showing each app's running state, route, ports, and checkout path, including when output is redirected.
 
-Run launchpad commands from the launchpad or any child directory. `uppr add` records a repository; `uppr pull` clones or fast forwards it into `repos/<name>`. `uppr install` generates app units and Caddy routes, enables app units, and starts or reloads Caddy. `uppr serve` builds images, starts or restarts app services, and waits for them to become ready. DNS for public domains must point to the host.
+Run launchpad commands from the launchpad or any child directory. `uppr add` records a repository; `uppr pull <name>` clones or fast forwards one checkout into `repos/<name>`, and `uppr pull --all` updates every checkout. Pulling never starts an app. `uppr install` generates app units and Caddy routes, enables app units, and starts or reloads Caddy. `uppr launch <name>` builds and starts one app from its current checkout; `uppr launch --all` does this for every repo. Launching never pulls from Git. `uppr serve` remains available as an alias for the existing launch behavior. DNS for public domains must point to the host.
+
+Use `uppr curl api /health` to call an app through its local port, or pass normal curl options after the path, such as `uppr curl api /items -X POST -H 'Content-Type: application/json' -d '{"name":"example"}'`. Uppr prints the full curl command before streaming headers and response output. Use `uppr caddyfile` to print the Caddyfile generated from the current launchpad manifest without changing files. `uppr generate` writes that file to disk.
 
 ## Application contract and schema
 
@@ -70,7 +72,7 @@ Generation creates an empty valid schema if no example file exists. It never cop
 ## Other commands
 
 - `uppr status [name]`, `uppr logs <name>`, `uppr stop [name]`, `uppr restart <name>` inspect and control apps.
-- `uppr generate` writes local systemd units and a Caddyfile for review.
+- `uppr generate` writes local systemd units and a Caddyfile for review; `uppr caddyfile` prints the current generated content.
 - `uppr remove <name>` removes an app from the manifest, preserving its checkout. Run `uppr install` to remove its service and route.
 - `uppr uninstall` removes the launchpad's installed units and routes, preserving its files.
 - `uppr auth login|status|logout` manages a GitHub token for HTTPS Git remotes under `~/.config/uppr/credentials.json`.

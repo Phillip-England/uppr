@@ -42,7 +42,7 @@ const actionLabels: Record<string, string> = {
   "schema-edit": "edit schema",
   "env-setup": "configure environment",
   install: "install services",
-  serve: "serve app",
+  serve: "launch app",
   logs: "view logs",
 };
 function Badge({ state }: { state: string }) {
@@ -135,7 +135,7 @@ function Board({
                     state={
                       interactive &&
                       restartJob(root, r.name)?.state === "restarting"
-                        ? "restarting"
+                        ? `${restartJob(root, r.name)?.action}ing`
                         : s.state
                     }
                   />
@@ -202,28 +202,39 @@ function Board({
               Enter → {actionLabels[active.setup.action]}
             </Text>
           )}
-          {interactive &&
-            restartJob(root, active.repo.name)?.state === "restarting" && (
-              <Text color={C.cyan}>o → observe restart output</Text>
-            )}
+          {interactive && restartJob(root, active.repo.name) && (
+            <Text color={C.cyan}>
+              o → observe {restartJob(root, active.repo.name)?.action} output
+            </Text>
+          )}
           {interactive &&
             restartJob(root, active.repo.name)?.state === "failed" && (
               <Text color={C.red}>
-                {restartJob(root, active.repo.name)?.message}. Run uppr restart{" "}
-                {active.repo.name} for details.
+                {restartJob(root, active.repo.name)?.message}. Press o for
+                output.
               </Text>
             )}
         </Box>
       )}
       {interactive && notice && <Text color={C.yellow}>{notice}</Text>}
+      {interactive && restartJob(root, "--all") && (
+        <Text color={C.cyan}>
+          {restartJob(root, "--all")?.action} all:{" "}
+          {restartJob(root, "--all")?.state === "restarting"
+            ? "running"
+            : restartJob(root, "--all")?.state}{" "}
+          · o view output
+        </Text>
+      )}
       {interactive && (
         <Box flexDirection="column" marginTop={1}>
           <Text color={C.muted}>
-            ↑↓ choose · Enter next · a add · p pull · c env · i install · ? help
+            ↑↓ choose · Enter next · a add · p pull · P pull all · A launch all
+            · ? help
           </Text>
           <Text color={C.muted}>
-            s serve · r restart · o observe · x stop · l logs · e schema · g
-            generate · q quit
+            s launch · r restart · o observe · u curl · v Caddyfile · x stop · l
+            logs · c env · i install · q quit
           </Text>
         </Box>
       )}
@@ -270,8 +281,19 @@ function Dashboard({
     if (key.upArrow || input === "k") setSelected((x) => Math.max(0, x - 1));
     if (key.downArrow || input === "j")
       setSelected((x) => Math.min(entries.length - 1, x + 1));
-    if (input === "a" || input === "i" || input === "?") {
-      onAction(input === "a" ? "add" : input === "i" ? "install" : "help");
+    if (["a", "i", "?", "P", "A", "v"].includes(input)) {
+      onAction(
+        (
+          {
+            a: "add",
+            i: "install",
+            "?": "help",
+            P: "pull-all",
+            A: "launch-all",
+            v: "caddyfile",
+          } as Record<string, string>
+        )[input],
+      );
       exit();
       return;
     }
@@ -279,11 +301,21 @@ function Dashboard({
     const entry = entries[Math.min(selected, entries.length - 1)];
     const name = entry.repo.name;
     if (input === "o") {
-      if (restartJob(root, name)?.state !== "restarting") {
-        setNotice(`${name} has no active operation to observe.`);
+      const target =
+        restartJob(root, name)?.state === "restarting"
+          ? name
+          : restartJob(root, "--all")?.state === "restarting"
+            ? "--all"
+            : restartJob(root, name)
+              ? name
+              : restartJob(root, "--all")
+                ? "--all"
+                : undefined;
+      if (!target) {
+        setNotice(`${name} has no operation output to observe.`);
         return;
       }
-      onAction("observe", name);
+      onAction("observe", target);
       exit();
       return;
     }
@@ -294,6 +326,7 @@ function Dashboard({
       r: "restart",
       x: "stop",
       l: "logs",
+      u: "curl",
       c: "env-setup",
       e: "schema-edit",
       g: "schema-generate",
@@ -329,23 +362,21 @@ function Observe({ root, name }: { root: string; name: string }) {
         ◈ UPPR / observe {name}
       </Text>
       <Text color={C.muted}>
-        Restart {job?.state || "complete"} · q/Esc dashboard
+        {job?.action || "Operation"}{" "}
+        {job?.state === "restarting" ? "running" : job?.state || "complete"} ·
+        q/Esc dashboard
       </Text>
-      {job?.state === "restarting" ? (
-        job.lines.length ? (
-          job.lines
-            .slice(-Math.max(1, (process.stdout.rows || 30) - 5))
-            .map((line, i) => (
-              <Text key={i} color={C.white}>
-                {line || " "}
-              </Text>
-            ))
-        ) : (
-          <Text color={C.muted}>Waiting for output…</Text>
-        )
+      {job?.lines.length ? (
+        job.lines
+          .slice(-Math.max(1, (process.stdout.rows || 30) - 5))
+          .map((line, i) => (
+            <Text key={i} color={C.white}>
+              {line || " "}
+            </Text>
+          ))
       ) : (
         <Text color={job?.state === "failed" ? C.red : C.green}>
-          {job?.message || "Observation ended"}
+          {job?.message || "Waiting for output…"}
         </Text>
       )}
     </Box>
@@ -810,11 +841,12 @@ function HelpScreen() {
       </Text>
       {[
         ["Enter", "Run the selected app's next setup step"],
-        ["a · p · c · i", "Add app · pull · configure env · install"],
+        ["a · p · P · A", "Add app · pull one · pull all · launch all"],
         [
           "s · r · o · x · l",
-          "Serve · restart · observe active output · stop · recent logs",
+          "Launch · restart · observe output · stop · recent logs",
         ],
+        ["u · v · c · i", "Curl app · Caddyfile · configure env · install"],
         ["e · g", "Edit schema · generate from env example"],
         ["↑↓ · j/k · q", "Select app · quit"],
       ].map(([keys, detail]) => (

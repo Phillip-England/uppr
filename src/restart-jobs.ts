@@ -3,6 +3,7 @@ import path from "node:path";
 
 export type RestartJob = {
   state: "restarting" | "succeeded" | "failed";
+  action: string;
   lines: string[];
   message?: string;
 };
@@ -23,19 +24,21 @@ export function restartJob(root: string, name: string): RestartJob | undefined {
   return jobs.get(key(root, name));
 }
 
-export function startRestart(
+export function startOperation(
   root: string,
   name: string,
+  action: string,
+  args: string[],
   unit?: string,
   entry = path.resolve(process.argv[1]),
 ) {
   const id = key(root, name);
   if (jobs.get(id)?.state === "restarting") return false;
-  const job: RestartJob = { state: "restarting", lines: [] };
+  const job: RestartJob = { state: "restarting", action, lines: [] };
   jobs.set(id, job);
   notify();
   // Use the current entry point so development and installed bundles behave alike.
-  const child = spawn(process.execPath, [entry, "restart", name], {
+  const child = spawn(process.execPath, [entry, ...args], {
     cwd: root,
     env: { ...process.env, FORCE_COLOR: "0", UPPR_NONINTERACTIVE: "1" },
     stdio: ["ignore", "pipe", "pipe"],
@@ -93,10 +96,18 @@ export function startRestart(
     job.message =
       error?.message ||
       (code === 0
-        ? "Restart complete"
-        : `Restart exited ${code ?? "unexpectedly"}`);
-    job.lines = []; // Command output exists only while the operation is observable.
+        ? `${action} complete`
+        : `${action} exited ${code ?? "unexpectedly"}`);
     notify();
   });
   return true;
+}
+
+export function startRestart(
+  root: string,
+  name: string,
+  unit?: string,
+  entry = path.resolve(process.argv[1]),
+) {
+  return startOperation(root, name, "Restart", ["restart", name], unit, entry);
 }

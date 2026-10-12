@@ -78,10 +78,126 @@ test("schema edit rejects an invalid live schema without changing it", () => {
     const result = spawnSync(
       "bun",
       [path.resolve(import.meta.dir, "cli.tsx"), "schema", "edit", "api"],
-      { cwd: root, env: { ...process.env, VISUAL: editor, EDITOR: editor }, encoding: "utf8" },
+      {
+        cwd: root,
+        env: { ...process.env, VISUAL: editor, EDITOR: editor },
+        encoding: "utf8",
+      },
     );
     expect(result.status).toBe(1);
     expect(fs.readFileSync(schema, "utf8")).toBe('{"variables": []}\n');
+  } finally {
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test("curl shows its request and response, and caddyfile is readable without generating files", () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "uppr-ops-test-"));
+  const root = path.join(base, "pad");
+  try {
+    expect(cli(base, "init", root).status).toBe(0);
+    expect(
+      cli(
+        root,
+        "add",
+        "https://example.com/api.git",
+        "--name",
+        "api",
+        "--port",
+        "24242",
+      ).status,
+    ).toBe(0);
+    expect(cli(root, "pull").status).toBe(1);
+    const localCaddy = fs.readFileSync(path.join(root, "Caddyfile"), "utf8");
+    const caddy = cli(root, "caddyfile");
+    expect(caddy.status).toBe(0);
+    expect(caddy.stdout).toContain("api.localhost {");
+    expect(caddy.stdout).toContain("reverse_proxy 127.0.0.1:24242");
+    expect(fs.readFileSync(path.join(root, "Caddyfile"), "utf8")).toBe(
+      localCaddy,
+    );
+
+    const bin = path.join(base, "bin");
+    fs.mkdirSync(bin);
+    fs.writeFileSync(
+      path.join(bin, "curl"),
+      '#!/bin/sh\nprintf "response body\\n"\n',
+      { mode: 0o700 },
+    );
+    const response = spawnSync(
+      "bun",
+      [
+        path.resolve(import.meta.dir, "cli.tsx"),
+        "curl",
+        "api",
+        "/health",
+        "-X",
+        "POST",
+        "-d",
+        "hello",
+      ],
+      {
+        cwd: root,
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+        encoding: "utf8",
+      },
+    );
+    expect(response.status).toBe(0);
+    expect(response.stdout).toContain("$ curl");
+    expect(response.stdout).toContain("'-d' 'hello'");
+    expect(response.stdout).toContain("'http://127.0.0.1:24242/health'");
+    expect(response.stdout).toContain("response body");
+  } finally {
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test("pull --all updates all checkouts and pull <name> updates only one", () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "uppr-pull-test-"));
+  const root = path.join(base, "pad");
+  const git = (cwd: string, ...args: string[]) => {
+    const result = spawnSync("git", args, {
+      cwd,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: "Uppr Test",
+        GIT_AUTHOR_EMAIL: "uppr@example.test",
+        GIT_COMMITTER_NAME: "Uppr Test",
+        GIT_COMMITTER_EMAIL: "uppr@example.test",
+      },
+    });
+    expect(result.status).toBe(0);
+    return result.stdout.trim();
+  };
+  try {
+    expect(cli(base, "init", root).status).toBe(0);
+    for (const name of ["one", "two"]) {
+      const source = path.join(base, `${name}-source`);
+      fs.mkdirSync(source);
+      git(source, "init", "-b", "main");
+      fs.writeFileSync(path.join(source, "version.txt"), "first\n");
+      git(source, "add", "version.txt");
+      git(source, "commit", "-m", "first");
+      const remote = path.join(base, `${name}.git`);
+      git(base, "clone", "--bare", source, remote);
+      git(source, "remote", "add", "origin", remote);
+      expect(cli(root, "add", remote, "--name", name).status).toBe(0);
+    }
+    expect(cli(root, "pull", "--all").status).toBe(0);
+    for (const name of ["one", "two"]) {
+      const source = path.join(base, `${name}-source`);
+      fs.writeFileSync(path.join(source, "version.txt"), "second\n");
+      git(source, "commit", "-am", "second");
+      git(source, "push", "origin", "main");
+    }
+    expect(cli(root, "pull", "one").status).toBe(0);
+    expect(
+      fs.readFileSync(path.join(root, "repos", "one", "version.txt"), "utf8"),
+    ).toBe("second\n");
+    expect(
+      fs.readFileSync(path.join(root, "repos", "two", "version.txt"), "utf8"),
+    ).toBe("first\n");
   } finally {
     fs.rmSync(base, { recursive: true, force: true });
   }

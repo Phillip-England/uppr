@@ -27,6 +27,7 @@ import {
   registryDir,
   renderCaddyUnit,
   repoDir,
+  renderCaddy,
   run,
   safeName,
   saveManifest,
@@ -663,8 +664,35 @@ export async function command(argv: string[]) {
     return;
   }
   if (cmd === "pull") {
-    if (args.length > 1) fail("usage: uppr pull [name]");
-    for (const r of select(m, args[0])) pull(root, r);
+    if (args.length !== 1) fail("usage: uppr pull <name|--all>");
+    for (const r of select(m, args[0] === "--all" ? undefined : args[0])) {
+      console.log("pulling", r.name);
+      pull(root, r);
+      console.log("pulled", r.name);
+    }
+    return;
+  }
+  if (cmd === "caddyfile") {
+    only(args, 0, "uppr caddyfile");
+    process.stdout.write(renderCaddy(m));
+    return;
+  }
+  if (cmd === "curl") {
+    if (!args[0] || args[0] === "--all")
+      fail("usage: uppr curl <name> [path] [curl options]");
+    const r = select(m, args[0])[0];
+    const rest = args.slice(1);
+    const route = rest[0]?.startsWith("/") ? rest.shift()! : "/";
+    const url = `http://127.0.0.1:${r.host_port}${route}`;
+    const curlArgs = [
+      "--no-progress-meter",
+      "--include",
+      "--fail-with-body",
+      ...rest,
+      url,
+    ];
+    console.log("$ curl", curlArgs.map(shellQuote).join(" "));
+    run("curl", curlArgs);
     return;
   }
   if (cmd === "push") {
@@ -704,7 +732,7 @@ export async function command(argv: string[]) {
     uninstallHost(m);
     return;
   }
-  if (cmd === "serve" || cmd === "restart") {
+  if (cmd === "serve" || cmd === "restart" || cmd === "launch") {
     linux();
     let targetRoot = root,
       targetM = m,
@@ -712,6 +740,9 @@ export async function command(argv: string[]) {
     if (cmd === "restart") {
       only(args, 1, "uppr restart <name>");
       name = args[0];
+    } else if (cmd === "launch") {
+      if (args.length !== 1) fail("usage: uppr launch <name|--all>");
+      name = args[0] === "--all" ? undefined : args[0];
     } else if (args.length === 1) {
       if (exists(args[0]) && fs.statSync(args[0]).isDirectory())
         [targetRoot, targetM] = findPad(args[0]);
@@ -904,4 +935,4 @@ async function restore(archive: string, dest: string) {
 }
 
 const guide = `# Integrating an application with Uppr\n\nCommit a production Dockerfile and schema.json at the repository root. The container must listen on 0.0.0.0 at its configured port. Store persistent data under /app/data and read environment variables from process.env. Uppr bind mounts config/ and data/ and passes config/.env through Docker --env-file. Keep config/ and data/ out of Git and Docker build context. Generate a starter schema with uppr schema generate <app>; edit one with uppr schema edit <app>.\n`;
-export const help = `uppr · deploy Docker apps with systemd and Caddy\n\n  uppr                         interactive dashboard\n  uppr list                    app status, routes, and paths\n  uppr init <dir>              create launchpad\n  uppr add <url> [options]      register app\n  uppr pull [name]             clone or update app\n  uppr schema generate <name> [--from-env FILE]\n  uppr schema edit <name>      edit and validate live schema\n  uppr schema add <name> <VAR> [--optional]\n  uppr schema remove <name> <VAR>\n  uppr prepare [name]          set required environment values\n  uppr generate | install | uninstall\n  uppr serve [path] [name] | restart <name> | stop [name]\n  uppr status [name] | logs <name>\n  uppr push <name> -m <message> | auth login|status|logout\n  uppr backup <archive.tar.gz> | restore <archive> <dir>\n  uppr deps check|install | doctor | dump [dir]\n`;
+export const help = `uppr · deploy Docker apps with systemd and Caddy\n\n  uppr                         interactive dashboard\n  uppr list                    app status, routes, and paths\n  uppr init <dir>              create launchpad\n  uppr add <url> [options]      register app\n  uppr pull <name|--all>       clone or fast-forward checkout only\n  uppr launch <name|--all>     build and run current checkouts; never pulls\n  uppr curl <name> [path] [curl options]  call a repo's local port\n  uppr caddyfile               print this launchpad's Caddyfile\n  uppr schema generate <name> [--from-env FILE]\n  uppr schema edit <name>      edit and validate live schema\n  uppr schema add <name> <VAR> [--optional]\n  uppr schema remove <name> <VAR>\n  uppr prepare [name]          set required environment values\n  uppr generate | install | uninstall\n  uppr serve [path] [name] | restart <name> | stop [name]\n  uppr status [name] | logs <name>\n  uppr push <name> -m <message> | auth login|status|logout\n  uppr backup <archive.tar.gz> | restore <archive> <dir>\n  uppr deps check|install | doctor | dump [dir]\n`;

@@ -1,8 +1,9 @@
 #!/usr/bin/env bun
 import path from "node:path";
+import { createInterface } from "node:readline/promises";
 import { command, help } from "./commands.ts";
 import { findPad, unitName } from "./core.ts";
-import { startRestart } from "./restart-jobs.ts";
+import { startOperation } from "./restart-jobs.ts";
 import {
   showAddApp,
   showContinue,
@@ -58,10 +59,28 @@ try {
       const action = await showDashboard();
       if (!action) break;
       const a = action as { kind: string; name?: string };
-      if (a.kind === "restart") {
+      if (
+        ["restart", "pull", "serve", "launch-all", "pull-all"].includes(a.kind)
+      ) {
         const [root, manifest] = findPad();
-        const repo = manifest.repos.find((repo) => repo.name === a.name)!;
-        startRestart(root, a.name!, unitName(manifest, repo));
+        const all = a.kind.endsWith("-all");
+        const name = all ? "--all" : a.name!;
+        const repo = all
+          ? undefined
+          : manifest.repos.find((repo) => repo.name === name)!;
+        const verb =
+          a.kind === "serve" || a.kind === "launch-all"
+            ? "launch"
+            : a.kind === "pull-all"
+              ? "pull"
+              : a.kind;
+        startOperation(
+          root,
+          name,
+          verb,
+          [verb, name],
+          repo && verb !== "pull" ? unitName(manifest, repo) : undefined,
+        );
         continue;
       }
       clearScreen();
@@ -74,6 +93,26 @@ try {
         continue;
       }
       try {
+        if (a.kind === "curl") {
+          const input = createInterface({
+            input: process.stdin,
+            output: process.stdout,
+          });
+          let route: string;
+          try {
+            route =
+              (
+                await input.question(`Request path for ${a.name} [/]: `)
+              ).trim() || "/";
+          } finally {
+            input.close();
+          }
+          if (!route.startsWith("/"))
+            throw new Error("request path must start with /");
+          await command(["curl", a.name!, route]);
+          await showContinue("Request complete");
+          continue;
+        }
         if (a.kind === "env-setup") {
           const saved = await showEnvSetup(a.name!);
           if (saved)
