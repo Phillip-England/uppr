@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import fs from "node:fs";
 import path from "node:path";
 import { Box, Text, useApp, useInput, render, renderToString } from "ink";
+import { restartJob, subscribeRestartJobs } from "./restart-jobs.ts";
 import {
   appStatus,
   appSetup,
@@ -65,12 +66,14 @@ function Board({
   entries,
   selected = -1,
   interactive = false,
+  notice,
 }: {
   root: string;
   m: Manifest;
   entries: Entry[];
   selected?: number;
   interactive?: boolean;
+  notice?: string;
 }) {
   const running = entries.filter((e) => e.status.state === "running").length;
   const active = entries[selected];
@@ -128,7 +131,14 @@ function Board({
                   </Text>
                 </Box>
                 <Box width={17}>
-                  <Badge state={s.state} />
+                  <Badge
+                    state={
+                      interactive &&
+                      restartJob(root, r.name)?.state === "restarting"
+                        ? "restarting"
+                        : s.state
+                    }
+                  />
                 </Box>
                 <Text color={setup.action ? C.yellow : C.green}>
                   {setup.label}
@@ -171,16 +181,28 @@ function Board({
               Enter → {actionLabels[active.setup.action]}
             </Text>
           )}
+          {interactive &&
+            restartJob(root, active.repo.name)?.state === "restarting" && (
+              <Text color={C.cyan}>o → observe restart output</Text>
+            )}
+          {interactive &&
+            restartJob(root, active.repo.name)?.state === "failed" && (
+              <Text color={C.red}>
+                {restartJob(root, active.repo.name)?.message}. Run uppr restart{" "}
+                {active.repo.name} for details.
+              </Text>
+            )}
         </Box>
       )}
+      {interactive && notice && <Text color={C.yellow}>{notice}</Text>}
       {interactive && (
         <Box flexDirection="column" marginTop={1}>
           <Text color={C.muted}>
             ↑↓ choose · Enter next · a add · p pull · c env · i install · ? help
           </Text>
           <Text color={C.muted}>
-            s serve · r restart · x stop · l logs · e schema · g generate · q
-            quit
+            s serve · r restart · o observe · x stop · l logs · e schema · g
+            generate · q quit
           </Text>
         </Box>
       )}
@@ -198,10 +220,18 @@ function Dashboard({
 }) {
   const { exit } = useApp();
   const [selected, setSelected] = useState(0),
-    [tick, setTick] = useState(0);
+    [tick, setTick] = useState(0),
+    [, setJobsRevision] = useState(0),
+    [notice, setNotice] = useState("");
   useEffect(() => {
     const id = setInterval(() => setTick((x) => x + 1), 3000);
-    return () => clearInterval(id);
+    const unsubscribe = subscribeRestartJobs(() =>
+      setJobsRevision((x) => x + 1),
+    );
+    return () => {
+      clearInterval(id);
+      unsubscribe();
+    };
   }, []);
   const entries = useMemo(
     () =>
@@ -227,6 +257,16 @@ function Dashboard({
     if (!entries.length) return;
     const entry = entries[Math.min(selected, entries.length - 1)];
     const name = entry.repo.name;
+    if (input === "o") {
+      if (restartJob(root, name)?.state !== "restarting") {
+        setNotice(`${name} has no active operation to observe.`);
+        return;
+      }
+      onAction("observe", name);
+      exit();
+      return;
+    }
+    setNotice("");
     const actions: Record<string, string> = {
       s: "serve",
       p: "pull",
@@ -250,8 +290,50 @@ function Dashboard({
       entries={entries}
       selected={selected}
       interactive
+      notice={notice}
     />
   );
+}
+function Observe({ root, name }: { root: string; name: string }) {
+  const { exit } = useApp();
+  const [, setTick] = useState(0);
+  useEffect(() => subscribeRestartJobs(() => setTick((x) => x + 1)), []);
+  useInput((input, key) => {
+    if (input === "q" || key.escape) exit();
+  });
+  const job = restartJob(root, name);
+  return (
+    <Box flexDirection="column" paddingX={1}>
+      <Text color={C.purple} bold>
+        ◈ UPPR / observe {name}
+      </Text>
+      <Text color={C.muted}>
+        Restart {job?.state || "complete"} · q/Esc dashboard
+      </Text>
+      {job?.state === "restarting" ? (
+        job.lines.length ? (
+          job.lines
+            .slice(-Math.max(1, (process.stdout.rows || 30) - 5))
+            .map((line, i) => (
+              <Text key={i} color={C.white}>
+                {line || " "}
+              </Text>
+            ))
+        ) : (
+          <Text color={C.muted}>Waiting for output…</Text>
+        )
+      ) : (
+        <Text color={job?.state === "failed" ? C.red : C.green}>
+          {job?.message || "Observation ended"}
+        </Text>
+      )}
+    </Box>
+  );
+}
+export async function showObserve(name: string) {
+  const [root] = findPad();
+  const app = render(<Observe root={root} name={name} />);
+  await app.waitUntilExit();
 }
 function EnvSetup({
   root,
@@ -708,7 +790,10 @@ function HelpScreen() {
       {[
         ["Enter", "Run the selected app's next setup step"],
         ["a · p · c · i", "Add app · pull · configure env · install"],
-        ["s · r · x · l", "Serve · restart · stop · recent logs"],
+        [
+          "s · r · o · x · l",
+          "Serve · restart · observe active output · stop · recent logs",
+        ],
         ["e · g", "Edit schema · generate from env example"],
         ["↑↓ · j/k · q", "Select app · quit"],
       ].map(([keys, detail]) => (

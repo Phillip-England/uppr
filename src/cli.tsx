@@ -1,7 +1,8 @@
 #!/usr/bin/env bun
 import path from "node:path";
 import { command, help } from "./commands.ts";
-import { findPad } from "./core.ts";
+import { findPad, unitName } from "./core.ts";
+import { startRestart } from "./restart-jobs.ts";
 import {
   showAddApp,
   showContinue,
@@ -10,6 +11,7 @@ import {
   showHelp,
   showInitPad,
   showList,
+  showObserve,
 } from "./ui.tsx";
 
 function clearScreen() {
@@ -56,7 +58,17 @@ try {
       const action = await showDashboard();
       if (!action) break;
       const a = action as { kind: string; name?: string };
+      if (a.kind === "restart") {
+        const [root, manifest] = findPad();
+        const repo = manifest.repos.find((repo) => repo.name === a.name)!;
+        startRestart(root, a.name!, unitName(manifest, repo));
+        continue;
+      }
       clearScreen();
+      if (a.kind === "observe") {
+        await showObserve(a.name!);
+        continue;
+      }
       if (a.kind === "help") {
         await showHelp();
         continue;

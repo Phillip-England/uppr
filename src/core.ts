@@ -199,7 +199,9 @@ export function which(cmd: string) {
 export function privileged(cmd: string, args: string[] = []) {
   run(
     process.getuid?.() === 0 ? cmd : "sudo",
-    process.getuid?.() === 0 ? args : [cmd, ...args],
+    process.getuid?.() === 0
+      ? args
+      : [...(process.env.UPPR_NONINTERACTIVE ? ["-n"] : []), cmd, ...args],
   );
 }
 export function linux() {
