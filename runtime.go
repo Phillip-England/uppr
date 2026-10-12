@@ -216,6 +216,21 @@ func privileged(name string, args ...string) error {
 	return command("sudo", append([]string{name}, args...)...)
 }
 
+func checkInstalledAppUnits(m Manifest, repos []Repo) error {
+	for _, r := range repos {
+		unit := unitName(m, r)
+		output, err := exec.Command("systemctl", "show", "--property=LoadState", "--value", unit).CombinedOutput()
+		state := strings.TrimSpace(string(output))
+		if err != nil {
+			return fmt.Errorf("check service %s: %w: %s", unit, err, state)
+		}
+		if state != "loaded" {
+			return fmt.Errorf("service %s is %s; run `uppr install` before `uppr serve`", unit, state)
+		}
+	}
+	return nil
+}
+
 func serveCommand(args []string) error {
 	if err := requireLinux(); err != nil {
 		return err
@@ -240,6 +255,9 @@ func serveCommand(args []string) error {
 	}
 	repos, err := selectRepos(m, name)
 	if err != nil {
+		return err
+	}
+	if err := checkInstalledAppUnits(m, repos); err != nil {
 		return err
 	}
 	if err := checkDockerAccess(); err != nil {
@@ -291,6 +309,9 @@ func restartCommand(args []string) error {
 	}
 	repos, err := selectRepos(m, args[0])
 	if err != nil {
+		return err
+	}
+	if err := checkInstalledAppUnits(m, repos); err != nil {
 		return err
 	}
 	if err := checkDockerAccess(); err != nil {

@@ -102,6 +102,33 @@ func TestDockerSocketPermissionErrorGivesRepairSteps(t *testing.T) {
 	}
 }
 
+func TestServicePreflightChecksEverySelectedApp(t *testing.T) {
+	root, m := testPad(t)
+	m, _ = testRepo(t, root, m, "api", 20000)
+	m, _ = testRepo(t, root, m, "site", 20001)
+	bin := t.TempDir()
+	checkLog := filepath.Join(bin, "checked")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$4\" >> \"$UPPR_TEST_CHECK_LOG\"\ncase \"$4\" in\n  *-site.service) echo not-found;;\n  *) echo loaded;;\nesac\n"
+	if err := os.WriteFile(filepath.Join(bin, "systemctl"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("UPPR_TEST_CHECK_LOG", checkLog)
+	err := checkInstalledAppUnits(m, m.Repos)
+	if err == nil || !strings.Contains(err.Error(), "site.service is not-found") || !strings.Contains(err.Error(), "uppr install") {
+		t.Fatalf("expected missing service before build, got %v", err)
+	}
+	checked, err := os.ReadFile(checkLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range m.Repos {
+		if !strings.Contains(string(checked), unitName(m, r)) {
+			t.Fatalf("service %s was not checked: %s", unitName(m, r), checked)
+		}
+	}
+}
+
 func TestGeneratedUnitsArePerAppAndCaddyRoutesUseHostPorts(t *testing.T) {
 	root, m := testPad(t)
 	m, _ = testRepo(t, root, m, "api", 20000)
