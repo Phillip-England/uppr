@@ -27,7 +27,7 @@ uppr serve
 
 The Docker group grants root-level access, so grant it only to an account you trust. Do not run `sudo uppr serve`: the generated app units use the account that ran `uppr install`, and runtime files should stay owned by that account. If `docker info` still fails, check `sudo systemctl status docker` and run `uppr doctor` for details.
 
-The `DEPRECATED: The legacy builder is deprecated` message means Buildx is missing; it is separate from the socket permission failure. If Docker came from Ubuntu's `docker.io` package, install `sudo apt-get install docker-buildx`. If Docker came from Docker's official apt repository, install `sudo apt-get install docker-buildx-plugin` instead. Confirm with `docker buildx version`.
+The `DEPRECATED: The legacy builder is deprecated` message means Buildx is missing; it is separate from the socket permission failure. Before `uppr serve` or `uppr restart` builds an image, Uppr checks `docker buildx version`. On an interactive Debian or Ubuntu host with a recognized Docker package, it offers to install the matching Buildx package. If declined or running without a terminal, it shows the install command and continues with the legacy builder. If Docker came from Ubuntu's `docker.io` package, the package is `docker-buildx`; if Docker came from Docker's official apt repository, it is `docker-buildx-plugin`. For other Docker installations, install the matching Buildx plugin manually and confirm with `docker buildx version`.
 
 You can build, initialize launchpads, manage Git repositories, prepare environments, generate files, and restore backups on other operating systems. Installing and controlling services requires Linux and systemd.
 

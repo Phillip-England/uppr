@@ -130,9 +130,6 @@ func renderCaddy(m Manifest) string {
 }
 
 func buildApp(root string, m Manifest, r Repo) error {
-	if err := checkDockerAccess(); err != nil {
-		return err
-	}
 	if err := prepareRepo(root, r, false); err != nil {
 		return err
 	}
@@ -245,6 +242,12 @@ func serveCommand(args []string) error {
 	if err != nil {
 		return err
 	}
+	if err := checkDockerAccess(); err != nil {
+		return err
+	}
+	if err := ensureBuildx(); err != nil {
+		return err
+	}
 	changed := map[string]bool{}
 	for _, r := range repos {
 		before := imageID(m, r)
@@ -288,6 +291,12 @@ func restartCommand(args []string) error {
 	}
 	repos, err := selectRepos(m, args[0])
 	if err != nil {
+		return err
+	}
+	if err := checkDockerAccess(); err != nil {
+		return err
+	}
+	if err := ensureBuildx(); err != nil {
 		return err
 	}
 	r := repos[0]

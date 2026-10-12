@@ -195,7 +195,12 @@ func setEnvValue(content []byte, key, value string) []byte {
 }
 func terminalInput() bool {
 	info, err := os.Stdin.Stat()
-	return err == nil && (info.Mode()&os.ModeCharDevice) != 0
+	if err != nil || (info.Mode()&os.ModeCharDevice) == 0 {
+		return false
+	}
+	cmd := exec.Command("stty", "-g")
+	cmd.Stdin = os.Stdin
+	return cmd.Run() == nil
 }
 func readHiddenLine(reader *bufio.Reader) (string, error) {
 	cmd := exec.Command("stty", "-echo")
