@@ -110,7 +110,7 @@ function Board({
           <Box width={17}>
             <Text color={C.muted}>STATE</Text>
           </Box>
-          <Text color={C.muted}>SETUP</Text>
+          <Text color={C.muted}>BROWSER URL</Text>
         </Box>
         {entries.length === 0 ? (
           <Text color={C.muted}>
@@ -140,15 +140,24 @@ function Board({
                     }
                   />
                 </Box>
-                <Text color={setup.action ? C.yellow : C.green}>
-                  {setup.label}
+                <Text
+                  color={s.state === "running" ? C.green : C.muted}
+                  bold={s.state === "running"}
+                >
+                  https://{r.domain}
                 </Text>
               </Box>
+              {s.state !== "running" && (
+                <Text color={setup.action ? C.yellow : C.muted}>
+                  {" "}
+                  Setup: {setup.label}
+                </Text>
+              )}
               {!interactive && (
                 <Text color={C.muted}>
                   {" "}
-                  https://{r.domain} · 127.0.0.1:{r.host_port} → :
-                  {r.container_port} · {repoDir(root, r)}
+                  Internal: 127.0.0.1:{r.host_port} → container :
+                  {r.container_port} · Files: {repoDir(root, r)}
                 </Text>
               )}
             </Box>
@@ -162,13 +171,25 @@ function Board({
           borderColor={C.cyan}
           paddingX={1}
         >
-          <Text color={C.white} bold>
-            {active.repo.name} <Text color={C.muted}>·</Text> https://
-            {active.repo.domain}
-          </Text>
-          <Text color={C.muted}>{active.setup.detail}</Text>
           <Text color={C.muted}>
-            127.0.0.1:{active.repo.host_port} → container :
+            {active.repo.name} ·{" "}
+            {active.status.state === "running"
+              ? "OPEN IN BROWSER"
+              : "CONFIGURED BROWSER URL"}
+          </Text>
+          <Text
+            color={active.status.state === "running" ? C.green : C.white}
+            bold
+          >
+            https://{active.repo.domain}
+          </Text>
+          {active.status.state !== "running" && (
+            <Text color={active.setup.action ? C.yellow : C.muted}>
+              {active.setup.label} · {active.setup.detail}
+            </Text>
+          )}
+          <Text color={C.muted}>
+            Internal: 127.0.0.1:{active.repo.host_port} → container :
             {active.repo.container_port}
           </Text>
           {active.status.health !== "—" && (
