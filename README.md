@@ -10,6 +10,8 @@ Build with Go 1.25 or newer:
 go build -o uppr .
 ```
 
+To install the CLI directly with Go, run `go install .`. This places the executable named `uppr` in your Go binary directory.
+
 Put the binary at a stable, absolute path on the Linux host, such as `~/.local/bin/uppr`, and add it to `PATH`. Generated app units record the binary's absolute path and the account that ran `uppr generate` or `uppr install`. Run those commands as the account that should own and operate the app files, and run `uppr install` again after moving the binary or launchpad.
 
 The host needs Git, Docker, Caddy, and systemd. The account that installs and runs the app units needs Docker access. `uppr deps check` reports missing tools; `uppr deps install` attempts to install Git, Docker, and Caddy with `apt-get` or `dnf` on Linux and starts Docker. Installation and service actions use `sudo` for privileged commands when needed. Caddy needs ports 80 and 443, so stop any other service using them before installing Uppr's shared Caddy service.
