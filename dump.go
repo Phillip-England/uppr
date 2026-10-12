@@ -7,116 +7,62 @@ import (
 	"path/filepath"
 )
 
-const integrationGuideFile = "UPPR.md"
-
-func dumpIntegrationGuide(args []string) error {
+func dumpCommand(args []string) error {
 	if len(args) > 1 {
-		return errors.New("usage: uppr dump [path]")
+		return errors.New("usage: uppr dump [directory]")
 	}
 	root := "."
 	if len(args) == 1 {
 		root = args[0]
 	}
-	absRoot, err := filepath.Abs(root)
+	path, err := filepath.Abs(filepath.Join(root, "UPPR.md"))
 	if err != nil {
 		return err
 	}
-	info, err := os.Stat(absRoot)
-	if err != nil {
+	if err := os.WriteFile(path, []byte(integrationGuide), 0o644); err != nil {
 		return err
 	}
-	if !info.IsDir() {
-		return fmt.Errorf("%s is not a directory", absRoot)
-	}
-	path := filepath.Join(absRoot, integrationGuideFile)
-	if err := os.WriteFile(path, []byte(integrationGuideMarkdown), 0o644); err != nil {
-		return err
-	}
-	fmt.Printf("wrote %s\n", path)
+	fmt.Println("wrote", path)
 	return nil
 }
 
-const integrationGuideMarkdown = `# Prepare this application for Uppr
+const integrationGuide = `# Integrating this application with Uppr v2
 
-This file is an implementation brief for an AI coding agent. Inspect this project, preserve its existing framework and behavior, and adapt it to the Uppr application contract below. Do not put real credentials, generated databases, or other runtime state in source control.
+Uppr runs this repository as one independently managed Docker container. Adapt the application to the following contract.
 
-## Required project layout
+## Repository files
 
-Create or verify this structure at the repository root:
+- Commit a production Dockerfile at the repository root. Its process must remain in the foreground and listen on 0.0.0.0.
+- Commit schema.json at the repository root. Declare every environment variable the app needs.
+- Ignore /config/ and /data/ in .gitignore and exclude them from the Docker build context in .dockerignore.
+- Never commit real credentials, databases, or uploads.
 
-~~~text
-.
-├── Dockerfile
-├── schema.json
-├── config/
-│   └── .env          # runtime environment values; never commit secrets
-└── data/
-    └── main.sqlite   # primary persistent SQLite database
-~~~
-
-The names and locations are part of the contract. Uppr bind-mounts the host project's ` + "`config/`" + ` directory at ` + "`/app/config`" + ` and ` + "`data/`" + ` at ` + "`/app/data`" + ` in the container. The application must therefore read environment variables from ` + "`/app/config/.env`" + ` and use ` + "`/app/data/main.sqlite`" + ` when it runs in Docker. For local execution, use the equivalent repository-relative paths ` + "`config/.env`" + ` and ` + "`data/main.sqlite`" + `.
-
-## Environment configuration
-
-- Load application settings from ` + "`config/.env`" + `. Do not require a root-level ` + "`.env`" + ` file.
-- Keep ` + "`config/.env`" + ` and all other files in ` + "`config/`" + ` out of Git.
-- Commit a root-level ` + "`schema.json`" + ` that documents every supported environment variable. Uppr uses it to create missing blank entries without overwriting existing values.
-- The preferred schema shape is:
+Example schema.json:
 
 ~~~json
 {
   "variables": [
     {
-      "name": "APP_ENV",
-      "description": "Runtime mode used by the application.",
-      "example": "production",
+      "name": "API_KEY",
+      "description": "Token for the upstream API",
+      "example": "a token from the provider dashboard",
       "required": true
     }
   ]
 }
 ~~~
 
-Use ` + "`name`" + ` for each variable key. Give each entry a useful ` + "`description`" + `, a safe non-secret ` + "`example`" + `, and an accurate ` + "`required`" + ` boolean. The legacy root-level ` + "`env.schema`" + ` format (one variable name per line) is supported, but new integrations should use ` + "`schema.json`" + `.
+## Runtime layout
 
-## Persistent data
+Uppr creates config/.env and data/main.sqlite under the repository. Inside the container, it bind mounts those directories to /app/config and /app/data and passes /app/config/.env through Docker's --env-file option. Read configuration from process environment variables. Store SQLite at /app/data/main.sqlite and all other durable state under /app/data. Do not depend on mutable files elsewhere in the image.
 
-- Store the primary SQLite database at ` + "`data/main.sqlite`" + ` locally and ` + "`/app/data/main.sqlite`" + ` in the container.
-- Store uploads and any other durable application state under ` + "`data/`" + ` so it survives container replacement.
-- Create parent directories on startup when necessary. Do not store durable state only in the container filesystem.
-- Ignore all of ` + "`data/`" + ` in Git. If the application does not use SQLite, still tolerate the Uppr-created ` + "`data/main.sqlite`" + ` file and keep all persistent state under ` + "`data/`" + `.
+The container port is set in the launchpad manifest when the repository is added. Ensure the app listens on that port. Uppr publishes it on a distinct host loopback port and Caddy proxies the configured domain to that port.
 
-## Docker contract
+## Check before shipping
 
-- Commit a production-ready root-level ` + "`Dockerfile`" + `.
-- Include a numeric ` + "`EXPOSE <port>`" + ` instruction. Uppr reads the first valid numeric exposed port and uses it as the default host and container port. Do not use only a variable such as ` + "`EXPOSE ${PORT}`" + `.
-- Make the application listen on ` + "`0.0.0.0`" + ` inside the container, not only ` + "`127.0.0.1`" + `.
-- The container startup command must start the application directly and remain in the foreground.
-- Ensure the configured application port matches the first numeric ` + "`EXPOSE`" + ` port.
-- Do not bake ` + "`config/.env`" + ` or ` + "`data/`" + ` into the image. Add both to ` + "`.dockerignore`" + `.
-- The image must work with the Uppr mounts at ` + "`/app/config`" + ` and ` + "`/app/data`" + `.
-
-## Source-control safety
-
-Add these protected paths to ` + "`.gitignore`" + ` (preserve any existing rules):
-
-~~~gitignore
-config/
-data/
-~~~
-
-Remove any tracked runtime secrets or database files from the Git index while preserving the local files. Never invent or commit credential values. A checked-in example file may contain safe placeholders, but ` + "`schema.json`" + ` is the canonical machine-readable environment reference.
-
-## Completion checklist
-
-Before declaring the integration complete:
-
-1. Verify the application uses ` + "`config/.env`" + ` and no root ` + "`.env`" + ` dependency remains.
-2. Verify durable state is written under ` + "`data/`" + ` and the primary SQLite path is ` + "`data/main.sqlite`" + `.
-3. Validate ` + "`schema.json`" + ` as JSON and confirm it covers every environment variable read by the code.
-4. Build the root ` + "`Dockerfile`" + ` and confirm its first numeric ` + "`EXPOSE`" + ` matches the listening port.
-5. Run the container with ` + "`config/`" + ` mounted to ` + "`/app/config`" + ` and ` + "`data/`" + ` mounted to ` + "`/app/data`" + `; verify it starts and accepts traffic.
-6. Confirm ` + "`config/`" + ` and ` + "`data/`" + ` are ignored and no secrets or runtime database files are tracked.
-7. Run the project's existing tests and report any unrelated failures separately.
-
-When finished, summarize the files changed, the exposed port, the environment variables documented, the persistence paths used, and the verification commands run.
+1. Build the image with docker build.
+2. Start it with empty config/ and data/ directories mounted at /app/config and /app/data.
+3. Verify it uses the expected container port and persists data after the container is replaced.
+4. Verify config/ and data/ are ignored by Git and Docker.
+5. Verify every required variable in schema.json is used and documented accurately.
 `

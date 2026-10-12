@@ -1,387 +1,110 @@
-# uppr
+# Uppr v2
 
-`uppr` manages workspaces of git repositories and generates Docker/Caddy launch
-files for them.
+Uppr is a CLI for deploying Git repositories as independent Docker applications on a Linux host. There is no Uppr web UI, HTTP API, or persistent Uppr control-plane daemon. Each installed app has a systemd service, and one shared Caddy service routes domains to the apps' loopback ports. The CLI generates and installs those services, then controls them through systemd.
 
-For the plain-English mental model—including runtime directories, systemd,
-state ownership, and the complete migration flow—read
-[`HOW_UPPR_WORKS.md`](HOW_UPPR_WORKS.md).
+## Build and host requirements
 
-## Setup
+Build with Go 1.25 or newer:
 
 ```sh
 go build -o uppr .
-./uppr init .
 ```
 
-Fill in `config/.env`:
+Put the binary at a stable, absolute path on the Linux host, such as `~/.local/bin/uppr`, and add it to `PATH`. Generated app units record the binary's absolute path and the account that ran `uppr generate` or `uppr install`. Run those commands as the account that should own and operate the app files, and run `uppr install` again after moving the binary or launchpad.
 
-```env
-GITHUB_USERNAME=your-username
-GITHUB_PASSWORD=your-token-or-password
-ADMIN_USERNAME=your-admin-username
-ADMIN_PASSWORD=use-a-strong-password
-SESSION_SECRET=use-a-long-random-secret
-ADDR=:9944
-UPPR_DOMAINS=uppr.example.com,www.uppr.example.com
-UPPR_DOCKER_IMAGE=uppr:local
-UPPR_DOCKER_NETWORK=uppr-network
-UPPR_RATE_LIMIT_ENABLED=true
-UPPR_RATE_LIMIT_ZONE=uppr
-UPPR_RATE_LIMIT_EVENTS=100
-UPPR_RATE_LIMIT_WINDOW=1m
-```
+The host needs Git, Docker, Caddy, and systemd. The account that installs and runs the app units needs Docker access. `uppr deps check` reports missing tools; `uppr deps install` attempts to install Git, Docker, and Caddy with `apt-get` or `dnf` on Linux and starts Docker. Installation and service actions use `sudo` for privileged commands when needed. Caddy needs ports 80 and 443, so stop any other service using them before installing Uppr's shared Caddy service.
 
-You can also set these from the web UI by opening `./uppr web .` and using the
-Credentials page.
+You can build, initialize launchpads, manage Git repositories, prepare environments, generate files, and restore backups on other operating systems. Installing and controlling services requires Linux and systemd.
 
-Then add repos with the CLI:
+## Deploy a launchpad
 
 ```sh
-./uppr add https://github.com/phillip-england/some-repo
+uppr init ./my-stack
+cd ./my-stack
+uppr add https://github.com/example/api.git --domain api.example.com --container-port 3000
+uppr add https://github.com/example/site.git --domain example.com --container-port 8080
+uppr pull
+uppr prepare
+uppr doctor
+uppr install
+uppr serve
 ```
 
-Or open a local web UI for the project:
+Replace the example repository URLs and domains with your own.
+
+Run launchpad commands from its directory or a child directory. `uppr init` creates `launchpad.json`, `repos/`, `systemd/`, a Caddyfile, and a `.gitignore`. `uppr add` records a repository in the manifest; `uppr pull` clones it into `repos/<name>/` or fast-forwards an existing checkout. Each app repository must have a root `Dockerfile` and `schema.json` before `uppr prepare` or `uppr install` can succeed. See [Application contract](#application-contract).
+
+`uppr prepare` creates `config/.env` and `data/main.sqlite` in each app checkout and prompts for required schema variables when run interactively. It preserves existing environment values. `uppr doctor` checks Git, Docker, Caddy, Docker daemon access, and each app's preparation state; its preparation check may create local files. It does not install services.
+
+`uppr install` generates local app units and a Caddyfile, validates the combined routes, installs the units, and starts or reloads the shared Caddy service. It **enables but does not start the app units**. `uppr serve` builds the app images, starts or restarts their units as needed, and waits for the containers to be running or healthy. DNS for public domains must point to the host. You can run `uppr generate` separately to inspect the generated `systemd/` files and Caddyfile before installation; `uppr install` also generates them.
+
+`uppr auth login` is optional for public repositories and SSH remotes. For private GitHub HTTPS repositories, run it before `uppr pull` and enter a personal access token. The token is saved at `~/.config/uppr/credentials.json` with mode `0600`, outside the launchpad and its backups. Git receives it through a temporary askpass helper and environment variable. Use `uppr auth status` or `uppr auth logout` to inspect or remove it.
+
+## Manage apps
 
 ```sh
-./uppr .
-./uppr web .
+uppr list
+uppr pull api
+uppr prepare api
+uppr restart api
+uppr status api
+uppr logs api
+uppr stop api
 ```
 
-The local web UI listens on `http://127.0.0.1:9944`.
+`restart` builds the image and checks the app environment before restarting that app's unit. `logs` follows the last 200 journal entries. `uppr serve [launchpad] [name]` can start a whole launchpad, including from another directory, or a named app. For example, `uppr serve ./my-stack` starts all its apps and `uppr serve ./my-stack api` starts only `api`.
 
-From the web UI, open a repository to edit its config, run git actions, and use
-the embedded browser shell in that repository's configured path.
+`uppr push api -m "message"` shows pending changes and requires an interactive confirmation before staging, committing, and pushing. Uppr refuses to push an app if Git already tracks files under `config/` or `data/`.
 
-For server deployment, run the authenticated web UI from the Uppr installation
-root:
+`uppr remove api` removes the app from `launchpad.json` but leaves its repository files. Run `uppr install` afterward to remove its installed unit and Caddy route. `uppr uninstall` removes all units and routes for the current launchpad while retaining its files.
 
-```sh
-./uppr serve --addr 0.0.0.0:9944 .
-```
+`uppr add` assigns a host loopback port starting at 20000 and defaults the container port to 3000. Use `--port` and `--container-port` to set them explicitly; the container port must match the app's listening port. `--name` and `--branch` are also available. Host ports and domains must be unique across installed launchpads; `uppr install` checks for conflicts before changing host configuration. The default domain is `<name>.localhost`.
 
-On first login, create a workspace from the Workspaces page. Uppr stores the
-workspace registry in the server root, but workspace directories are created in
-a system data location, not under the current project directory:
+## Application contract
 
-```text
-macOS:   ~/Library/Application Support/uppr/workspaces/<workspace-name>/
-Linux:   ${XDG_DATA_HOME:-~/.local/share}/uppr/workspaces/<workspace-name>/
-Windows: %LOCALAPPDATA%\uppr\workspaces\<workspace-name>\
-```
-
-Set `UPPR_WORKSPACES_DIR` before launching `uppr serve` to choose a deployment
-specific workspace storage directory.
-
-Each workspace has its own `repos.conf` and `config/.env`. The server root has
-`workspaces.conf` plus the generated root `Caddyfile`, `docker-compose.yml`,
-and `Makefile` used to launch all registered workspaces.
-
-`uppr serve` keeps this app's own runtime files in the same layout used by the
-generated apps:
-
-- `./config/.env` stores GitHub credentials plus `ADMIN_USERNAME`,
-  `ADMIN_PASSWORD`, `SESSION_SECRET`, and `ADDR`.
-- `./data/main.sqlite` stores bounded login failure tracking.
-
-`uppr serve` and `uppr web` refuse to start when `config/.env` is missing, and
-the authenticated server requires non-empty admin credentials and a session
-secret. Login failures are
-tracked by client IP for a 24 hour window and old rows are purged during login
-checks, so the tracking table does not grow indefinitely.
-
-The included `Dockerfile` exposes port `9944` and starts:
-
-```sh
-uppr serve --addr 0.0.0.0:${PORT} .
-```
-
-## Install the native control plane
-
-Uppr and Caddy run as independent native services. Docker Compose contains only
-the managed applications, so replacing the app stack cannot stop the UI or
-reverse proxy that initiated the replacement.
-
-Build the rate-limit-enabled Caddy binary, then generate, install, enable, and
-start both units:
-
-```sh
-./uppr install-caddyx
-./uppr service .
-```
-
-Run `uppr service [path]` whenever the service definitions or executable path
-change. It updates both `/etc/systemd/system/uppr.service` and
-`/etc/systemd/system/caddy.service`, reloads systemd, enables both units, and
-restarts them. Run it as the ordinary account that installed and will operate
-Uppr; the command requests `sudo` only when installing the root-owned systemd
-unit files and controlling the services. Both services themselves run as that
-ordinary user, so generated files remain editable without `sudo`. That user
-must have access to Docker (normally through membership in the `docker` group).
-
-`install-caddyx` writes `~/.local/bin/caddyx` by default; pass a destination
-path to override it. `service-caddy` finds that location, searches `PATH`, or
-uses `CADDYX_PATH`. The service commands create `config/.env`, `data/`, and
-`workspaces.conf` when missing. Before installing the units, fill in
-`ADMIN_USERNAME` and `ADMIN_PASSWORD` in `config/.env`; `SESSION_SECRET` is
-generated automatically. Set `UPPR_DOMAINS` to one or more comma-separated
-Caddy hostnames.
-
-If Docker itself reports `permission denied` for `/var/run/docker.sock`, add the
-operator account to the Docker group, then log out and back in so the new group
-is present in the login session:
-
-```sh
-sudo usermod -aG docker "$USER"
-```
-
-Do not run `uppr`, `uppr launch`, or `uppr service` itself with `sudo`; doing so
-creates root-owned generated files and workspace contents. The narrow `sudo`
-prompts from `uppr service` are expected because systemd unit installation and
-service control are privileged operations.
-
-The Uppr unit regenerates the root runtime files, launches the managed app
-containers, and then runs the current executable directly on port 9944. The
-Caddy unit regenerates once more immediately before it runs `caddyx` directly
-on ports 80 and 443, so boot never depends on stale generated files. Managed
-app ports are published by Docker only on `127.0.0.1`, and the generated
-Caddyfile proxies to those loopback ports. After changing or onboarding an app,
-`uppr launch` (or Launch in the web UI) regenerates everything, updates changed
-app containers while leaving unchanged ones running, and reloads Caddy while
-Uppr remains available. On a first launch where Caddy is not running yet, Uppr
-starts it instead.
-
-Uppr's public route is rate limited by client IP. The default permits 100
-requests per minute; use `UPPR_RATE_LIMIT_ENABLED`, `UPPR_RATE_LIMIT_EVENTS`,
-`UPPR_RATE_LIMIT_WINDOW`, and `UPPR_RATE_LIMIT_ZONE` in `config/.env` to change
-or disable it.
-
-Optional repo settings can be passed when adding:
-
-```sh
-./uppr add https://github.com/phillip-england/some-repo --name some-repo --path apps/some-repo --branch main
-```
-
-You can also edit `repos.conf` directly:
-
-```ini
-[repo]
-url = https://github.com/phillip-england/some-repo
-```
-
-## Back up and restore a complete state
-
-Export the current project (or server root) to one portable compressed artifact:
-
-```sh
-./uppr backup ./uppr-state.tar.gz
-```
-
-The artifact contains the app repositories themselves, including every app's
-`config/` and `data/` directories, plus Uppr configuration and runtime data.
-Against a server root it also includes workspaces stored outside that root. Stop
-or quiesce applications that are actively writing databases before backing up.
-
-Restore it on the same machine or copy it to another one:
-
-```sh
-./uppr restore ./uppr-state.tar.gz
-```
-
-An optional final path selects another root. Existing files with the same names
-are overwritten; unrelated files are retained. Server workspaces are restored
-beneath the destination runtime's `data/workspaces/` directory.
-`UPPR_WORKSPACES_DIR` and `workspaces.conf` are rewritten to those portable
-paths, so the restored server does not depend on the old runtime directory. Run
-`uppr launch` after restoring to rebuild and start the applications, or run
-`uppr service` there to make that runtime the systemd-managed server.
-
-For a same-machine move, initialize a separate destination and migrate directly
-from the CLI:
-
-```sh
-./uppr init ../new-dir
-./uppr migrate . ../new-dir
-```
-
-Run this as the user that should own the files. If the destination requires
-administrator access, use `sudo` for the migration and then repair ownership,
-for example `sudo chown -R -- uppr-user:uppr-user ../new-dir`. Migration is a
-CLI-only operation; the source directory is left unchanged.
-
-## Manage repos
-
-```sh
-./uppr list
-./uppr remove some-repo
-```
-
-`uppr remove` accepts a repo name, URL, or configured path.
-
-## Pull repos
-
-```sh
-./uppr pull
-```
-
-`uppr pull` looks for the nearest initialized uppr project by walking up from the
-current directory. Repo paths in `repos.conf` are resolved relative to that
-project directory, so different directories can each have their own `config/.env`,
-`repos.conf`, and cloned repos.
-
-For each repo, `uppr pull` clones it if `path` does not contain a git repository, otherwise it runs:
-
-```sh
-git -C <path> pull --ff-only
-```
-
-If `path` is omitted, `uppr` derives the repo name from the URL and uses `apps/<repo-name>`.
-For example, `https://github.com/phillip-england/some-repo` is cloned to `apps/some-repo`.
-
-Optional repo settings:
-
-```ini
-[repo]
-name = some-repo
-url = https://github.com/phillip-england/some-repo
-path = apps/some-repo
-branch = main
-port = 3000
-container_port = 3000
-domain = some-repo.localhost
-domain = www.some-repo.localhost
-rate_limit_enabled = true
-rate_limit_zone = dynamic
-rate_limit_events = 100
-rate_limit_window = 1m
-env = NODE_ENV=production
-env = API_BASE_URL=https://api.example.test
-volume = ./cache/some-repo:/app/cache
-```
-
-Runtime settings:
-
-- `port`: host port exposed by Docker Compose.
-- `container_port`: app port inside the container. If omitted, `uppr` uses the
-  first `EXPOSE` port from the app's `Dockerfile` when available, otherwise
-  `port` is used.
-- `domain`: repeatable Caddy hostname. If omitted, `uppr` uses `<name>.localhost`.
-- `rate_limit_enabled`: enables app-level Caddy rate limiting. Defaults to `true`
-  for every newly added application; set it to `false` to explicitly opt out.
-- `rate_limit_zone`: Caddy rate-limit zone name. Defaults to `dynamic`.
-- `rate_limit_events`: allowed events per window. Defaults to `100`.
-- `rate_limit_window`: rate-limit window such as `1m` or `30s`. Defaults to `1m`.
-- `env`: repeated `KEY=value` entries for container environment.
-- `volume`: repeated Docker volume entries such as `./cache:/app/cache`.
-
-## Generate runtime files
-
-Each configured repo is assumed to have a `Dockerfile` at its configured `path`.
-Generate the runtime files from `repos.conf` with:
-
-```sh
-./uppr generate
-```
-
-This writes:
-
-- `Caddyfile`
-- `caddyx.Dockerfile`
-- `docker-compose.yml`
-- `Makefile`
-
-The generated `caddyx.Dockerfile` builds Caddy with
-`github.com/mholt/caddy-ratelimit`, and the generated Docker Compose file uses
-that image instead of stock Caddy so app-level rate limiting works at launch.
-
-The generated Docker Compose file always mounts each app's local
-`./apps/<app>/config` directory to `/app/config` and `./apps/<app>/data` to
-`/app/data`, and uses `./apps/<app>/config/.env` as that service's env file.
-Apps can rely on `./config/.env` and `./data/main.sqlite` being available when
-their image uses `/app` as its working directory.
-
-When an app Dockerfile includes a line such as `EXPOSE 3000`, `uppr` can infer
-that app's port. `uppr pull` writes the discovered value to both `port` and
-`container_port` when either is missing, and `uppr generate` also uses the
-exposed port in memory for existing local checkouts.
-
-App repos can also include a `schema.json` file at the repo root:
+An app repository needs a root `Dockerfile` and a root `schema.json`. The Docker process must listen on `0.0.0.0` at the configured container port and remain in the foreground. A minimal schema is:
 
 ```json
 {
   "variables": [
     {
       "name": "API_KEY",
-      "description": "Secret token used to call the upstream API.",
-      "example": "sk_live_...",
+      "description": "Token for the upstream API",
+      "example": "Get this from the provider dashboard",
       "required": true
-    },
-    {
-      "name": "DATABASE_URL",
-      "description": "Postgres connection string used by the application.",
-      "example": "postgres://user:password@db:5432/app"
     }
   ]
 }
 ```
 
-During pull/sync, `uppr` reads `schema.json` and prepares
-`./apps/<app>/config/.env` with blank entries for any missing keys. Existing
-values in that `.env` file are preserved, so the admin only fills in values and
-does not need to remember each app's environment variable names. The web UI also
-shows schema descriptions and examples while values are being filled in.
-Legacy `env.schema` files with one variable name per line are still supported.
-See `ENV_SCHEMA_JSON.md` for the schema contract to give other projects.
+`variables` may be empty. A variable is required unless `"required": false` is specified. `uppr prepare` prompts for missing required values; `uppr install` and app starts reject missing required values without prompting. Uppr adds `config/` and `data/` to the app's `.gitignore` and `.dockerignore`, creates `config/.env` with mode `0600`, and bind mounts those directories at `/app/config` and `/app/data`. It passes the environment file to Docker with `--env-file`. Store durable data under `/app/data`.
 
-The generated `Makefile` includes:
+Run `uppr dump` in an app repository to write an `UPPR.md` integration guide there, or `uppr dump <directory>` to choose another location.
 
-```sh
-make launch
-make stop
-make pull
-make push m="common commit message"
+## Launchpad files and backups
+
+```text
+my-stack/
+  launchpad.json
+  Caddyfile
+  systemd/
+  repos/
+    api/
+      Dockerfile
+      schema.json
+      config/.env
+      data/main.sqlite
 ```
 
-At the server root, launch the whole system with:
+The launchpad `.gitignore` excludes `repos/`. The manifest, Caddyfile, and generated unit copies can be committed, but generated units contain absolute paths and must be regenerated after moving the launchpad. A copied launchpad retains its ID, so installing the copy on the same host replaces the installed path for that ID. Create a separate launchpad with `uppr init` for an independently running deployment.
 
 ```sh
-./uppr launch .
+uppr backup ../my-stack.tar.gz
+uppr restore ../my-stack.tar.gz ../restored-stack
+cd ../restored-stack
+uppr doctor
+uppr install
+uppr serve
 ```
 
-`uppr launch` creates any missing server files, regenerates the root runtime
-files from all registered workspaces, runs `docker compose up --build` from the
-server root to update changed services and remove orphans while leaving
-unchanged containers running, waits until every container is running (and
-healthy when it has a healthcheck), and then validates and
-force-reloads Caddy with the new configuration (or starts Caddy when it is not
-running yet). A crashing container or failed Caddy refresh makes launch fail
-instead of displaying a false success.
-
-You can generate the root runtime files without launching Docker with:
-
-```sh
-./uppr generate-server .
-```
-
-The root Docker Compose file directly defines the Caddy service and every app
-service from every workspace. Workspaces do not need their own compose files for
-server launch.
-
-The generated server Compose file fixes the project name to `uppr`, rather than
-deriving it from the runtime directory. This keeps container identity stable
-across a same-machine runtime migration and prevents the old and new directory
-names from producing competing stacks on the same published ports.
-
-## Push repos
-
-```sh
-./uppr push "common commit message"
-./uppr push -m "common commit message"
-```
-
-`uppr push` stages all changes in each configured repo, commits repos that have
-staged changes with the shared message, and then runs:
-
-```sh
-git -C <path> push
-```
+The backup archive must be outside the launchpad. It contains the entire launchpad, including Git checkouts, app configuration, data, and secrets; protect it accordingly. On Linux, backup stops active app units during the archive and starts them again afterward. On other systems, stop apps yourself before backing up databases. Restore requires a destination that does not exist and leaves host installation, DNS, and dependencies to the destination machine.
