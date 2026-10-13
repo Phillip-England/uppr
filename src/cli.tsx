@@ -6,6 +6,7 @@ import { startOperation } from "./restart-jobs.ts";
 import {
   showAddApp,
   showContinue,
+  showDependencies,
   showCurlPath,
   showDashboard,
   showEnvSetup,
@@ -93,6 +94,22 @@ try {
       }
       if (a.kind === "help") {
         await showHelp();
+        continue;
+      }
+      if (a.kind === "dependencies") {
+        const dependencyAction = await showDependencies();
+        if (dependencyAction) {
+          clearScreen();
+          try {
+            await command(["deps", dependencyAction]);
+            await showContinue(
+              dependencyAction === "install" ? "Host setup complete" : "Docker access updated",
+              dependencyAction === "install" ? "Review any remaining items with D on the dashboard." : "Sign out and back in, then check host setup with D.",
+            );
+          } catch (error) {
+            await showContinue("Host setup needs attention", error instanceof Error ? error.message : String(error), true);
+          }
+        }
         continue;
       }
       try {

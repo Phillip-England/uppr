@@ -10,6 +10,13 @@ function cli(cwd: string, ...args: string[]) {
     encoding: "utf8",
   });
 }
+test("dependency check reports the host services needed to launch apps", () => {
+  const result = cli(process.cwd(), "deps", "check");
+  expect(result.stdout).toContain("Linux and systemd");
+  expect(result.stdout).toContain("Docker access");
+  expect(result.stdout).toContain("Docker Buildx");
+  expect(result.stdout).toContain("Caddy rate limit");
+});
 test("CLI creates a schema, lists its route, and archives/restores a pad", () => {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), "uppr-cli-test-")),
     root = path.join(base, "pad");

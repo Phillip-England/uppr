@@ -6,6 +6,7 @@ import net from "node:net";
 import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { gitToken, removeGitToken, saveGitToken } from "./auth.ts";
+import { caddyBinary, dependencies } from "./deps.ts";
 import {
   appStatus,
   appRouting,
@@ -183,11 +184,6 @@ async function ready(m: Manifest, r: Repo) {
 }
 function readRegistry() {
   return installedPads();
-}
-function caddyBinary() {
-  return exists("/usr/local/bin/uppr-caddy")
-    ? "/usr/local/bin/uppr-caddy"
-    : which("uppr-caddy") || which("caddy");
 }
 function rateLimitCaddy() {
   const binary = caddyBinary();
@@ -567,49 +563,60 @@ export async function command(argv: string[]) {
     return;
   }
   if (cmd === "deps") {
+    if (args[0] === "docker-access") {
+      only(args, 1, "uppr deps docker-access");
+      linux();
+      if (!which("docker")) fail("install Docker first with uppr deps install");
+      const username = os.userInfo().username;
+      privileged("groupadd", ["-f", "docker"]);
+      privileged("usermod", ["-aG", "docker", username]);
+      console.log(`Added ${username} to the docker group. Sign out and back in before launching apps.`);
+      return;
+    }
     if (args[0] === "caddy") {
       only(args, 1, "uppr deps caddy");
       buildRateLimitCaddy();
       return;
     }
     if (args[0] === "check") {
-      let missing = false;
-      for (const tool of ["git", "docker", "caddy", "systemctl", "bun"]) {
-        const found = tool === "bun" ? exists(process.execPath) : tool === "caddy" ? !!caddyBinary() : !!which(tool);
-        console.log(found ? "OK" : "MISSING", tool);
-        missing ||= !found;
-      }
-      const rateLimit = !!caddyBinary() && probe(caddyBinary(), ["list-modules"]).out.split("\n").includes("http.handlers.rate_limit");
-      console.log(rateLimit ? "OK" : "MISSING", "Caddy rate_limit module");
-      missing ||= !rateLimit;
-      if (missing) fail("dependencies missing");
+      only(args, 1, "uppr deps check");
+      const rows = dependencies();
+      for (const row of rows)
+        console.log(row.ok ? "OK" : row.required ? "MISSING" : "OPTIONAL", row.name, "—", row.detail);
+      if (rows.some((row) => row.required && !row.ok)) fail("dependencies missing");
       return;
     }
     if (args[0] === "install") {
+      only(args, 1, "uppr deps install");
       linux();
+      console.log("Installing host packages. Sudo may ask for your password...");
       if (which("apt-get")) {
+        const buildxPackage = ["docker-buildx", "docker-buildx-plugin"].find((pkg) => probe("apt-cache", ["show", pkg]).ok);
         privileged("apt-get", [
           "install",
           "-y",
           "git",
+          "sudo",
+          "systemd",
+          "curl",
           "docker.io",
-          "docker-buildx",
-          "caddy",
           "golang-go",
+          ...(buildxPackage ? [buildxPackage] : []),
         ]);
         privileged("systemctl", ["enable", "--now", "docker.service"]);
-        buildRateLimitCaddy();
-        return;
-      }
-      if (which("dnf")) {
-        privileged("dnf", ["install", "-y", "git", "moby-engine", "caddy", "golang"]);
+      } else if (which("dnf")) {
+        const buildxPackage = ["docker-buildx-plugin", "docker-buildx"].find((pkg) => probe("dnf", ["info", pkg]).ok);
+        privileged("dnf", ["install", "-y", "git", "sudo", "systemd", "curl", "moby-engine", "golang", ...(buildxPackage ? [buildxPackage] : [])]);
         privileged("systemctl", ["enable", "--now", "docker.service"]);
+      } else fail("automatic dependency installation supports apt and dnf");
+      if (!dependencies().find((row) => row.name === "Caddy rate limit")?.ok)
         buildRateLimitCaddy();
-        return;
-      }
-      fail("automatic dependency installation supports apt and dnf");
+      console.log("Host package installation complete.");
+      for (const row of dependencies())
+        console.log(row.ok ? "OK" : row.required ? "NEEDS ATTENTION" : "OPTIONAL", row.name, "—", row.detail);
+      return;
     }
-    fail("usage: uppr deps check|install");
+    fail("usage: uppr deps check|install|caddy|docker-access");
   }
   if (cmd === "auth") {
     only(args, 1, "uppr auth login|status|logout");
@@ -1029,4 +1036,4 @@ Create or update a schema with uppr schema generate <app>, uppr schema domains <
 
 The Caddy binary must include github.com/mholt/caddy-ratelimit. Run uppr deps install or uppr deps caddy to build one with xcaddy and install it as /usr/local/bin/uppr-caddy. Uppr validates generated Caddyfiles before installing them. Use uppr caddyfile to preview the routes and uppr doctor to check the host.
 `;
-export const help = `uppr · deploy Docker apps with systemd and Caddy\n\n  uppr                         interactive dashboard\n  uppr list                    app status, routes, and paths\n  uppr init <dir>              create launchpad\n  uppr add <url> [options]      register app\n  uppr pull <name|--all>       clone or fast-forward checkout only\n  uppr launch <name|--all>     build and run current checkouts; never pulls\n  uppr curl <name> [path] [curl options]  call a repo's local port\n  uppr caddyfile               print this launchpad's Caddyfile\n  uppr schema generate <name> [--from-env FILE]\n  uppr schema edit <name>      edit and validate live schema\n  uppr schema domains <name> <domain[,domain...]>\n  uppr schema rate <name> --events N --window 1m [--zone dynamic]\n  uppr schema add <name> <VAR> [--optional]\n  uppr schema remove <name> <VAR>\n  uppr prepare [name]          set required environment values\n  uppr generate | install | uninstall\n  uppr serve [path] [name] | restart <name> | stop [name]\n  uppr status [name] | logs <name>\n  uppr push <name> -m <message> | auth login|status|logout\n  uppr backup <archive.tar.gz> | restore <archive> <dir>\n  uppr deps check|install|caddy | doctor | dump [dir]\n`;
+export const help = `uppr · deploy Docker apps with systemd and Caddy\n\n  uppr                         interactive dashboard\n  uppr list                    app status, routes, and paths\n  uppr init <dir>              create launchpad\n  uppr add <url> [options]      register app\n  uppr pull <name|--all>       clone or fast-forward checkout only\n  uppr launch <name|--all>     build and run current checkouts; never pulls\n  uppr curl <name> [path] [curl options]  call a repo's local port\n  uppr caddyfile               print this launchpad's Caddyfile\n  uppr schema generate <name> [--from-env FILE]\n  uppr schema edit <name>      edit and validate live schema\n  uppr schema domains <name> <domain[,domain...]>\n  uppr schema rate <name> --events N --window 1m [--zone dynamic]\n  uppr schema add <name> <VAR> [--optional]\n  uppr schema remove <name> <VAR>\n  uppr prepare [name]          set required environment values\n  uppr generate | install | uninstall\n  uppr serve [path] [name] | restart <name> | stop [name]\n  uppr status [name] | logs <name>\n  uppr push <name> -m <message> | auth login|status|logout\n  uppr backup <archive.tar.gz> | restore <archive> <dir>\n  uppr deps check|install|caddy|docker-access | doctor | dump [dir]\n`;

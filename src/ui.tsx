@@ -4,6 +4,7 @@ import path from "node:path";
 import { Box, Text, useApp, useInput, render, renderToString } from "ink";
 import { restartJob, subscribeRestartJobs } from "./restart-jobs.ts";
 import { gitToken, removeGitToken, saveGitToken } from "./auth.ts";
+import { dependencies } from "./deps.ts";
 import {
   appStatus,
   appSetup,
@@ -23,6 +24,7 @@ import {
   starterSchema,
   validDomain,
   validPort,
+  which,
   type Manifest,
   type Repo,
   type Variable,
@@ -262,7 +264,7 @@ function Board({
         <Box flexDirection="column" marginTop={1}>
           <Text color={C.muted}>
             ↑↓ choose · Enter next · a add · p pull · P pull all · A launch all
-            · ? help
+            · D host setup · ? help
           </Text>
           <Text color={C.muted}>
             s launch · r restart · o observe · u curl · v Caddyfile · x stop · l
@@ -313,7 +315,7 @@ function Dashboard({
     if (key.upArrow || input === "k") setSelected((x) => Math.max(0, x - 1));
     if (key.downArrow || input === "j")
       setSelected((x) => Math.min(entries.length - 1, x + 1));
-    if (["a", "i", "?", "P", "A", "v", "t"].includes(input)) {
+    if (["a", "i", "?", "P", "A", "v", "t", "D"].includes(input)) {
       onAction(
         (
           {
@@ -324,6 +326,7 @@ function Dashboard({
             A: "launch-all",
             v: "caddyfile",
             t: "settings",
+            D: "dependencies",
           } as Record<string, string>
         )[input],
       );
@@ -1080,6 +1083,55 @@ export async function showContinue(
   );
   await app.waitUntilExit();
 }
+function DependenciesScreen({ onAction }: { onAction: (action: "install" | "docker-access") => void }) {
+  const { exit } = useApp();
+  const rows = dependencies();
+  const canInstall = process.platform === "linux" && !!(which("apt-get") || which("dnf"));
+  const missing = rows.filter((row) => row.required && !row.ok);
+  const dockerInstalled = !!rows.find((row) => row.name === "Docker")?.ok;
+  const accessRow = rows.find((row) => row.name === "Docker access");
+  const dockerAccess = !!accessRow?.ok;
+  const needsDockerGroup = !dockerAccess && /permission denied/i.test(accessRow?.detail || "");
+  useInput((input, key) => {
+    if (input === "q" || key.escape) exit();
+    if (key.return && canInstall) {
+      onAction("install");
+      exit();
+    }
+    if (input === "g" && process.platform === "linux" && dockerInstalled && needsDockerGroup) {
+      onAction("docker-access");
+      exit();
+    }
+  });
+  return (
+    <Box flexDirection="column" paddingX={1}>
+      <Text color={C.purple} bold>◈ UPPR / host setup</Text>
+      <Text color={C.muted}>Shared tools for every repo in this launchpad</Text>
+      <Box flexDirection="column" marginY={1}>
+        {rows.map((row) => (
+          <Box key={row.name}>
+            <Box width={22}><Text color={row.ok ? C.green : row.required ? C.yellow : C.muted}>{row.ok ? "✓" : row.required ? "!" : "○"} {row.name}</Text></Box>
+            <Text color={C.muted}>{row.detail}</Text>
+          </Box>
+        ))}
+      </Box>
+      {missing.length === 0 && <Text color={C.green}>Host dependencies are ready.</Text>}
+      {needsDockerGroup && dockerInstalled && process.platform === "linux" && (
+        <Text color={C.yellow}>g grant this account Docker access · sign out and back in afterward</Text>
+      )}
+      <Text color={canInstall ? C.cyan : C.yellow}>
+        {canInstall ? "Enter install or repair with apt/dnf · sudo may ask for your password" : "Automatic installation needs a Linux host with apt or dnf"}
+      </Text>
+      <Text color={C.muted}>Esc/q return to dashboard</Text>
+    </Box>
+  );
+}
+export async function showDependencies() {
+  let action: "install" | "docker-access" | null = null;
+  const app = render(<DependenciesScreen onAction={(value) => { action = value; }} />);
+  await app.waitUntilExit();
+  return action;
+}
 export async function showHelp() {
   const app = render(<HelpScreen />);
   await app.waitUntilExit();
@@ -1095,6 +1147,7 @@ function HelpScreen() {
       {[
         ["Enter", "Run the selected app's next setup step"],
         ["a · p · P · A", "Add app · pull one · pull all · launch all"],
+        ["D", "Check and install host dependencies"],
         [
           "s · r · o · x · l",
           "Launch · restart · observe output · stop · recent logs",
