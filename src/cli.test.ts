@@ -5,11 +5,44 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 
 function cli(cwd: string, ...args: string[]) {
-  return spawnSync("bun", [path.resolve(import.meta.dir, "cli.tsx"), ...args], {
+  return spawnSync("bun", [path.resolve(import.meta.dir, "cli.ts"), ...args], {
     cwd,
     encoding: "utf8",
   });
 }
+test("no arguments and command help work outside a launchpad", () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "uppr-help-test-"));
+  try {
+    const root = cli(base);
+    expect(root.status).toBe(0);
+    expect(root.stdout).toContain("Usage: uppr <command>");
+    expect(root.stdout).toContain("uppr help <command>");
+    const topic = cli(base, "schema", "--help");
+    expect(topic.status).toBe(0);
+    expect(topic.stdout).toContain("uppr schema domains");
+  } finally { fs.rmSync(base, { recursive: true, force: true }); }
+});
+test("environment commands show metadata and set values without printing them", () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "uppr-env-test-"));
+  const root = path.join(base, "pad");
+  try {
+    expect(cli(base, "init", root).status).toBe(0);
+    expect(cli(root, "add", "https://example.com/api.git", "--name", "api").status).toBe(0);
+    const repo = path.join(root, "repos", "api");
+    fs.mkdirSync(repo);
+    fs.writeFileSync(path.join(repo, "Dockerfile"), "FROM scratch\n");
+    fs.writeFileSync(path.join(repo, "schema.json"), JSON.stringify({ variables: [{ name: "TOKEN", description: "API token", required: false }] }));
+    const set = spawnSync("bun", [path.resolve(import.meta.dir, "cli.ts"), "env", "set", "api", "TOKEN"], { cwd: root, input: "secret-value\n", encoding: "utf8" });
+    expect(set.status).toBe(0);
+    expect(fs.readFileSync(path.join(repo, "config", ".env"), "utf8")).toContain("TOKEN=secret-value");
+    const list = cli(root, "env", "list", "api");
+    expect(list.status).toBe(0);
+    expect(list.stdout).toContain("TOKEN · optional · set · API token");
+    expect(list.stdout).not.toContain("secret-value");
+    expect(cli(root, "env", "unset", "api", "TOKEN").status).toBe(0);
+    expect(cli(root, "env", "list", "api").stdout).toContain("TOKEN · optional · empty");
+  } finally { fs.rmSync(base, { recursive: true, force: true }); }
+});
 test("dependency check reports the host services needed to launch apps", () => {
   const result = cli(process.cwd(), "deps", "check");
   expect(result.stdout).toContain("Linux and systemd");
@@ -84,7 +117,7 @@ test("schema edit rejects an invalid live schema without changing it", () => {
     );
     const result = spawnSync(
       "bun",
-      [path.resolve(import.meta.dir, "cli.tsx"), "schema", "edit", "api"],
+      [path.resolve(import.meta.dir, "cli.ts"), "schema", "edit", "api"],
       {
         cwd: root,
         env: { ...process.env, VISUAL: editor, EDITOR: editor },
@@ -134,7 +167,7 @@ test("curl shows its request and response, and caddyfile is readable without gen
     const response = spawnSync(
       "bun",
       [
-        path.resolve(import.meta.dir, "cli.tsx"),
+        path.resolve(import.meta.dir, "cli.ts"),
         "curl",
         "api",
         "/health",
@@ -206,7 +239,7 @@ test("run-app publishes the PORT selected by schema and env", () => {
     );
     const result = spawnSync(
       "bun",
-      [path.resolve(import.meta.dir, "cli.tsx"), "run-app", root, "api"],
+      [path.resolve(import.meta.dir, "cli.ts"), "run-app", root, "api"],
       {
         cwd: root,
         encoding: "utf8",
@@ -223,7 +256,7 @@ test("run-app publishes the PORT selected by schema and env", () => {
     fs.writeFileSync(path.join(repo, "config", ".env"), "");
     const fallback = spawnSync(
       "bun",
-      [path.resolve(import.meta.dir, "cli.tsx"), "run-app", root, "api"],
+      [path.resolve(import.meta.dir, "cli.ts"), "run-app", root, "api"],
       {
         cwd: root,
         encoding: "utf8",

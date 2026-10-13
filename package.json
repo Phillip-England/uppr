@@ -4,20 +4,16 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "bun src/cli.tsx",
+    "start": "bun src/cli.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
-    "build": "bun build ./src/cli.tsx --target=bun --outfile=dist/uppr.js"
+    "build": "bun build ./src/cli.ts --target=bun --outfile=dist/uppr.js"
   },
   "dependencies": {
-    "ink": "^6.5.1",
-    "react": "^19.2.0",
-    "react-devtools-core": "^7",
     "tar": "^7.5.22"
   },
   "devDependencies": {
     "@types/bun": "^1.3.0",
-    "@types/react": "^19.2.0",
     "prettier": "^3.9.10",
     "typescript": "^5.9.0"
   }
