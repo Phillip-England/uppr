@@ -18,9 +18,13 @@ test("no arguments and command help work outside a launchpad", () => {
     expect(root.status).toBe(0);
     expect(root.stdout).toContain("Usage: uppr <command>");
     expect(root.stdout).toContain("uppr help <command>");
+    expect(root.stdout).toContain("domains <name> <domain,...>");
+    expect(root.stdout).toContain("schema edit <name>");
     const topic = cli(base, "schema", "--help");
     expect(topic.status).toBe(0);
     expect(topic.stdout).toContain("uppr schema domains");
+    expect(topic.stdout).toContain("uppr schema edit <app>");
+    expect(topic.stdout).toContain("$VISUAL, $EDITOR, or vi");
     expect(cli(base, "domains", "--help").stdout).toContain("uppr domains <app>");
     expect(cli(base, "ip", "--help").stdout).toContain("uppr ip");
     expect(cli(base, "deps", "--help").stdout).toContain("uppr deps caddy-switch");

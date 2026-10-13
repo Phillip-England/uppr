@@ -1157,7 +1157,8 @@ Start here
   add <git-url> [options]          Register an app
   pull <name|--all>                Clone or fast-forward checkouts
   schema generate <name>           Create an app schema
-  domains <name> <domain,...>      Set an app's public domains
+  domains <name> <domain,...>      Set domains in the app's schema.json
+  schema edit <name>               Open schema.json in your editor
   prepare [name]                   Fill missing required environment values
   install                          Install systemd units and Caddy routes
   launch <name|--all>              Build and start current checkouts
@@ -1165,7 +1166,9 @@ Start here
 
 Manage apps
   env list|set|unset <name> [VAR]  Inspect or change app environment
-  schema <subcommand>              Manage variables, domains, and rate limits
+  schema show <name>               Print an app's schema.json
+  schema add|remove <name> <VAR>   Add or remove a schema variable
+  schema rate <name> [options]     Set the app's rate limit
   status [name]                    Show service and container status
   logs <name> [--no-follow]        Show journal logs
   curl <name> [path] [curl args]    Call an app's loopback port
@@ -1192,9 +1195,9 @@ const topics: Record<string, string> = {
   init: `uppr init <directory>\nCreate a launchpad with launchpad.json, repos/, and systemd/.`,
   add: `uppr add <git-url> [--name NAME] [--domain DOMAIN] [--port HOST_PORT] [--container-port PORT] [--branch BRANCH]\nRegister an app. The host port is assigned automatically if omitted; the container port defaults to 3000. Then run uppr pull <name>.`,
   pull: `uppr pull <name|--all>\nClone or fast-forward Git checkouts. This does not build or start apps.`,
-  domains: `uppr domains <app> <domain[,domain...]>\nSet the app's domains in repos/<app>/schema.json. Run uppr install to apply routes. Point each public domain's DNS at the server IP shown by uppr ip.`,
+  domains: `uppr domains <app> <domain[,domain...]>\nExample: uppr domains api api.example.com,alt.example.com\nSet the app's domains in repos/<app>/schema.json. Run uppr install to apply routes. Point each public domain's DNS at the server IP shown by uppr ip.`,
   ip: `uppr ip\nPrint this server's public IPv4 address. Uses api.ipify.org and requires internet access; no launchpad is needed.`,
-  schema: `uppr schema generate <app> [--from-env FILE] [--force]\nuppr schema show|edit <app>\nuppr schema add <app> <VARIABLE> [--description TEXT] [--example TEXT] [--optional]\nuppr schema remove <app> <VARIABLE>\nuppr schema domains <app> <domain[,domain...]>\nuppr schema rate <app> [--events N] [--window 1m] [--zone dynamic]\nThe schema lives at repos/<app>/schema.json. Run uppr install after changing routes or rate limits.`,
+  schema: `uppr schema generate <app> [--from-env FILE] [--force]\nuppr schema show <app>\nuppr schema edit <app>\nuppr schema add <app> <VARIABLE> [--description TEXT] [--example TEXT] [--optional]\nuppr schema remove <app> <VARIABLE>\nuppr schema domains <app> <domain[,domain...]>\nuppr schema rate <app> [--events N] [--window 1m] [--zone dynamic]\nThe schema lives at repos/<app>/schema.json. Edit opens $VISUAL, $EDITOR, or vi and validates the schema when you save. To change domains, run uppr domains api api.example.com,alt.example.com. Run uppr install after changing routes or rate limits.`,
   env: `uppr env list <app>\nuppr env set <app> <VARIABLE>\nuppr env unset <app> <VARIABLE>\nList shows schema descriptions, examples, and whether values are set without printing secrets. Set reads one value from a hidden terminal prompt or stdin (for example: printf '%s' "$TOKEN" | uppr env set api API_KEY). Unset clears an optional value. Restart the app after changes.`,
   prepare: `uppr prepare [app]\nPrompt for missing required schema variables and create config/.env and data/main.sqlite. Existing values are preserved. Use uppr env list <app> to inspect variable status and uppr env set <app> <VARIABLE> to set optional values.`,
   install: `uppr install\nValidate and install app systemd units and Caddy routes; enable services and start or reload Caddy. Only one launchpad may be installed on a server. If caddy.service is active, review its sites and run uppr deps caddy-switch first.`,
