@@ -33,6 +33,7 @@ cd my-pad
 uppr add https://github.com/you/api.git --name api --domain api.example.com
 uppr pull api
 uppr schema generate api
+uppr domains api api.example.com
 uppr schema show api
 uppr prepare api
 uppr env list api
@@ -43,7 +44,7 @@ uppr list
 uppr curl api /health
 ```
 
-Run launchpad commands from its root or any child directory. `uppr` or `uppr help` prints the command index; `uppr help add`, `uppr help schema`, and other command topics show options. `uppr list` shows every app's state, routes, ports, checkout path, and next setup step. DNS for public domains must point to the host.
+Run launchpad commands from its root or any child directory. `uppr` or `uppr help` prints the command index; `uppr help add`, `uppr help domains`, and other command topics show options. `uppr list` shows every app's state, routes, ports, checkout path, and next setup step. `uppr ip` prints the server's public IPv4 address from any directory. Point public domains' DNS at that address.
 
 `uppr add` records a repository but does not clone it. Its options are `--name`, `--domain`, `--port` (host port), `--container-port` (default 3000), and `--branch`. `uppr pull <name>` clones or fast forwards a checkout; `uppr pull --all` updates all of them. Pulling does not start apps. `uppr install` validates and installs systemd units and Caddy routes. `uppr launch <name>` builds and starts from the current checkout, without pulling Git changes; `uppr launch --all` handles all registered apps. `uppr serve [path] [name]` remains as a compatibility alias for launching.
 
@@ -78,11 +79,11 @@ uppr schema show api
 uppr schema edit api                        # opens $VISUAL, $EDITOR, or vi; validates on save
 uppr schema add api NEW_KEY --description "Purpose" --example "example" --optional
 uppr schema remove api OLD_KEY
-uppr schema domains api api.example.com,alt.example.com
+uppr domains api api.example.com,alt.example.com
 uppr schema rate api --events 250 --window 1m --zone dynamic
 ```
 
-Generation produces a valid empty schema if no example file exists. It does not copy example values into the schema. Schema changes are local Git changes. Run `uppr install` after changing domains or rate limits.
+Generation produces a valid empty schema if no example file exists. It does not copy example values into the schema. `uppr domains` creates `schema.json` if needed. Schema changes are local Git changes. Run `uppr install` after changing domains or rate limits.
 
 ```sh
 uppr prepare api                # prompt for missing required values

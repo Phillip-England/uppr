@@ -64,6 +64,27 @@ function option(args: string[], name: string) {
 function only(args: string[], n: number, usage: string) {
   if (args.length !== n) fail(`usage: ${usage}`);
 }
+export async function lookupPublicIp(request: (url: string, init: RequestInit) => Promise<Response> = fetch) {
+  let response: Response;
+  try {
+    response = await request("https://api.ipify.org", {
+      signal: AbortSignal.timeout(5000),
+    });
+  } catch (error) {
+    fail(`could not look up public IP: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (!response.ok) fail(`could not look up public IP: HTTP ${response.status}`);
+  const address = (await response.text()).trim();
+  if (net.isIP(address) !== 4) fail("public IP lookup returned an invalid IPv4 address");
+  return address;
+}
+function setDomains(root: string, r: Repo, value: string) {
+  const p = schemaPath(root, r);
+  const schema: Schema = exists(p) ? readSchema(p) : starterSchema(root, r);
+  schema.domains = value.split(",").map((domain) => domain.trim());
+  saveSchema(p, schema);
+  console.log(`updated domains in ${p}; run uppr install to apply`);
+}
 function ttyLine(prompt: string, hidden = false) {
   process.stderr.write(prompt);
   if (hidden) spawnSync("stty", ["-echo"], { stdio: "inherit" });
@@ -508,11 +529,8 @@ export function schemaCommand(args: string[]) {
     return;
   }
   if (sub === "domains") {
-    if (!args[2]) fail("usage: uppr schema domains <app> <domain[,domain...]>");
-    const s: Schema = exists(p) ? readSchema(p) : starterSchema(root, r);
-    s.domains = args.slice(2).join(",").split(",").map((x) => x.trim());
-    saveSchema(p, s);
-    console.log(`updated domains in ${p}; run uppr install to apply`);
+    only(args, 3, "uppr schema domains <app> <domain[,domain...]>");
+    setDomains(root, r, args[2]);
     return;
   }
   if (sub === "rate") {
@@ -567,6 +585,11 @@ export async function command(argv: string[]) {
       console.log("x-access-token");
     else if (args[0]?.toLowerCase().includes("password"))
       console.log(process.env.UPPR_GIT_TOKEN || "");
+    return;
+  }
+  if (cmd === "ip") {
+    only(args, 0, "uppr ip");
+    console.log(await lookupPublicIp());
     return;
   }
   if (cmd === "deps") {
@@ -743,6 +766,11 @@ export async function command(argv: string[]) {
   }
   if (cmd === "schema") {
     schemaCommand(args);
+    return;
+  }
+  if (cmd === "domains") {
+    only(args, 2, "uppr domains <app> <domain[,domain...]>");
+    setDomains(root, select(m, args[0])[0], args[1]);
     return;
   }
   if (cmd === "add") {
@@ -1100,7 +1128,7 @@ Example schema.json:
 
 The domains array is the source for Caddy routes. If it is absent, Uppr uses the launchpad manifest domain for older apps. Rate limiting applies per client IP through the Caddy rate_limit module. Missing rate_limit values default to 100 events per 1m in zone dynamic. Uppr prefixes the generated zone with the launchpad and app IDs to isolate apps. Set the values per application as needed. Each domain routes to the app's loopback host port. DNS must point to the host. After a schema route change, run uppr install.
 
-Create or update a schema with uppr schema generate <app>, uppr schema domains <app> api.example.com,alt.example.com, and uppr schema rate <app> --events 100 --window 1m --zone dynamic. Schema changes are local Git changes; inspect and push them with uppr push <app> -m "Update routes". Store a GitHub personal access token for HTTPS remotes with uppr auth login; SSH remotes use your SSH key.
+Create or update a schema with uppr schema generate <app>, uppr domains <app> api.example.com,alt.example.com, and uppr schema rate <app> --events 100 --window 1m --zone dynamic. Run uppr ip on the server to see its public IPv4 address for DNS. Schema changes are local Git changes; inspect and push them with uppr push <app> -m "Update routes". Store a GitHub personal access token for HTTPS remotes with uppr auth login; SSH remotes use your SSH key.
 
 The Caddy binary must include github.com/mholt/caddy-ratelimit. Run uppr deps install or uppr deps caddy to build one with xcaddy and install it as /usr/local/bin/uppr-caddy. Uppr validates generated Caddyfiles before installing them. Use uppr caddyfile to preview the routes and uppr doctor to check the host.
 `;
@@ -1115,6 +1143,7 @@ Start here
   add <git-url> [options]          Register an app
   pull <name|--all>                Clone or fast-forward checkouts
   schema generate <name>           Create an app schema
+  domains <name> <domain,...>      Set an app's public domains
   prepare [name]                   Fill missing required environment values
   install                          Install systemd units and Caddy routes
   launch <name|--all>              Build and start current checkouts
@@ -1131,6 +1160,7 @@ Manage apps
   remove <name>                   Unregister an app; preserve its files
 
 Host and data
+  ip                               Show this server's public IPv4 address
   caddyfile | generate             Preview or write generated configuration
   uninstall                        Remove this launchpad's installed services
   deps caddy|docker-access         Build Caddy or grant Docker group access
@@ -1141,12 +1171,14 @@ Host and data
   dump [directory]                 Write the app integration guide
 
 Run uppr help <command> for options and examples. Commands except init, restore,
-deps, auth, and help run from a launchpad or any directory inside it.`;
+deps, auth, ip, and help run from a launchpad or any directory inside it.`;
 
 const topics: Record<string, string> = {
   init: `uppr init <directory>\nCreate a launchpad with launchpad.json, repos/, and systemd/.`,
   add: `uppr add <git-url> [--name NAME] [--domain DOMAIN] [--port HOST_PORT] [--container-port PORT] [--branch BRANCH]\nRegister an app. The host port is assigned automatically if omitted; the container port defaults to 3000. Then run uppr pull <name>.`,
   pull: `uppr pull <name|--all>\nClone or fast-forward Git checkouts. This does not build or start apps.`,
+  domains: `uppr domains <app> <domain[,domain...]>\nSet the app's domains in repos/<app>/schema.json. Run uppr install to apply routes. Point each public domain's DNS at the server IP shown by uppr ip.`,
+  ip: `uppr ip\nPrint this server's public IPv4 address. Uses api.ipify.org and requires internet access; no launchpad is needed.`,
   schema: `uppr schema generate <app> [--from-env FILE] [--force]\nuppr schema show|edit <app>\nuppr schema add <app> <VARIABLE> [--description TEXT] [--example TEXT] [--optional]\nuppr schema remove <app> <VARIABLE>\nuppr schema domains <app> <domain[,domain...]>\nuppr schema rate <app> [--events N] [--window 1m] [--zone dynamic]\nThe schema lives at repos/<app>/schema.json. Run uppr install after changing routes or rate limits.`,
   env: `uppr env list <app>\nuppr env set <app> <VARIABLE>\nuppr env unset <app> <VARIABLE>\nList shows schema descriptions, examples, and whether values are set without printing secrets. Set reads one value from a hidden terminal prompt or stdin (for example: printf '%s' "$TOKEN" | uppr env set api API_KEY). Unset clears an optional value. Restart the app after changes.`,
   prepare: `uppr prepare [app]\nPrompt for missing required schema variables and create config/.env and data/main.sqlite. Existing values are preserved. Use uppr env list <app> to inspect variable status and uppr env set <app> <VARIABLE> to set optional values.`,

@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import { lookupPublicIp } from "./commands.ts";
 
 function cli(cwd: string, ...args: string[]) {
   return spawnSync("bun", [path.resolve(import.meta.dir, "cli.ts"), ...args], {
@@ -20,6 +21,8 @@ test("no arguments and command help work outside a launchpad", () => {
     const topic = cli(base, "schema", "--help");
     expect(topic.status).toBe(0);
     expect(topic.stdout).toContain("uppr schema domains");
+    expect(cli(base, "domains", "--help").stdout).toContain("uppr domains <app>");
+    expect(cli(base, "ip", "--help").stdout).toContain("uppr ip");
   } finally { fs.rmSync(base, { recursive: true, force: true }); }
 });
 test("environment commands show metadata and set values without printing them", () => {
@@ -191,14 +194,19 @@ test("curl shows its request and response, and caddyfile is readable without gen
     fs.rmSync(base, { recursive: true, force: true });
   }
 });
-test("schema route commands update the repo and dump documents deployment", () => {
+test("domains command creates a schema, validates domains, and updates routes", () => {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), "uppr-routing-test-"));
   const root = path.join(base, "pad");
   try {
     expect(cli(base, "init", root).status).toBe(0);
     expect(cli(root, "add", "https://example.com/api.git", "--name", "api").status).toBe(0);
     fs.mkdirSync(path.join(root, "repos", "api"));
-    expect(cli(root, "schema", "generate", "api").status).toBe(0);
+    expect(cli(root, "domains", "api", "api.example.com,alt.example.com").status).toBe(0);
+    const schemaPath = path.join(root, "repos", "api", "schema.json");
+    const saved = fs.readFileSync(schemaPath, "utf8");
+    expect(JSON.parse(saved).domains).toEqual(["api.example.com", "alt.example.com"]);
+    expect(cli(root, "domains", "api", "bad domain").status).toBe(1);
+    expect(fs.readFileSync(schemaPath, "utf8")).toBe(saved);
     expect(cli(root, "schema", "domains", "api", "api.example.com,alt.example.com").status).toBe(0);
     expect(cli(root, "schema", "rate", "api", "--events", "25", "--window", "10s").status).toBe(0);
     const caddy = cli(root, "caddyfile");
@@ -211,6 +219,12 @@ test("schema route commands update the repo and dump documents deployment", () =
     expect(guide).toContain("rate_limit");
     expect(guide).toContain("domains");
   } finally { fs.rmSync(base, { recursive: true, force: true }); }
+});
+
+test("public IP lookup prints only a validated IPv4 address", async () => {
+  expect(await lookupPublicIp(async () => new Response("203.0.113.7\n"))).toBe("203.0.113.7");
+  expect(lookupPublicIp(async () => new Response("not an IP"))).rejects.toThrow("invalid IPv4");
+  expect(lookupPublicIp(async () => new Response("error", { status: 503 }))).rejects.toThrow("HTTP 503");
 });
 
 test("run-app publishes the PORT selected by schema and env", () => {
