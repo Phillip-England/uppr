@@ -23,6 +23,7 @@ test("no arguments and command help work outside a launchpad", () => {
     expect(topic.stdout).toContain("uppr schema domains");
     expect(cli(base, "domains", "--help").stdout).toContain("uppr domains <app>");
     expect(cli(base, "ip", "--help").stdout).toContain("uppr ip");
+    expect(cli(base, "deps", "--help").stdout).toContain("uppr deps caddy-switch");
   } finally { fs.rmSync(base, { recursive: true, force: true }); }
 });
 test("environment commands show metadata and set values without printing them", () => {

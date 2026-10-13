@@ -32,6 +32,7 @@ import {
   probe,
   readSchema,
   readEnv,
+  requireSinglePad,
   registryDir,
   renderCaddyUnit,
   repoDir,
@@ -256,15 +257,16 @@ function verifyUnit(p: string) {
 async function installHost(root: string, m: Manifest) {
   linux();
   console.log("Checking host and preparing app configuration...");
-  if (active("caddy.service") && !active("uppr-caddy.service"))
+  const pads = readRegistry();
+  requireSinglePad(root, m, pads);
+  if (active("caddy.service") || probe("systemctl", ["is-enabled", "--quiet", "caddy.service"]).ok)
     fail(
-      "caddy.service is active; stop it before installing uppr-caddy.service",
+      "caddy.service is active or enabled; review its sites, then run uppr deps caddy-switch to stop and disable it before rerunning uppr install",
     );
   for (const r of m.repos) prepareRepo(root, r);
   generate(root, m);
   const caddy = rateLimitCaddy();
   if (!which("docker")) fail("docker is required; run uppr deps install");
-  const pads = readRegistry();
   pads[m.id] = { id: m.id, root };
   const body = globalCaddy(pads);
   console.log("Validating Caddy routes and app services...");
@@ -593,6 +595,18 @@ export async function command(argv: string[]) {
     return;
   }
   if (cmd === "deps") {
+    if (args[0] === "caddy-switch") {
+      only(args, 1, "uppr deps caddy-switch");
+      linux();
+      const state = probe("systemctl", ["show", "--property=LoadState", "--value", "caddy.service"]);
+      if (!state.ok || state.out === "not-found") {
+        console.log("caddy.service is not installed; run uppr install from your launchpad");
+        return;
+      }
+      privileged("systemctl", ["disable", "--now", "caddy.service"]);
+      console.log("Stopped and disabled caddy.service. Run uppr install from your launchpad to start uppr-caddy.service.");
+      return;
+    }
     if (args[0] === "docker-access") {
       only(args, 1, "uppr deps docker-access");
       linux();
@@ -646,7 +660,7 @@ export async function command(argv: string[]) {
         console.log(row.ok ? "OK" : row.required ? "NEEDS ATTENTION" : "OPTIONAL", row.name, "—", row.detail);
       return;
     }
-    fail("usage: uppr deps check|install|caddy|docker-access");
+    fail("usage: uppr deps check|install|caddy|caddy-switch|docker-access");
   }
   if (cmd === "auth") {
     only(args, 1, "uppr auth login|status|logout");
@@ -1163,7 +1177,8 @@ Host and data
   ip                               Show this server's public IPv4 address
   caddyfile | generate             Preview or write generated configuration
   uninstall                        Remove this launchpad's installed services
-  deps caddy|docker-access         Build Caddy or grant Docker group access
+  deps caddy|caddy-switch          Build Caddy or switch from caddy.service
+  deps docker-access              Grant Docker group access
   doctor                           Check host and app readiness
   auth login|status|logout         Manage HTTPS Git token
   backup <archive.tar.gz>          Archive launchpad, including data
@@ -1182,7 +1197,7 @@ const topics: Record<string, string> = {
   schema: `uppr schema generate <app> [--from-env FILE] [--force]\nuppr schema show|edit <app>\nuppr schema add <app> <VARIABLE> [--description TEXT] [--example TEXT] [--optional]\nuppr schema remove <app> <VARIABLE>\nuppr schema domains <app> <domain[,domain...]>\nuppr schema rate <app> [--events N] [--window 1m] [--zone dynamic]\nThe schema lives at repos/<app>/schema.json. Run uppr install after changing routes or rate limits.`,
   env: `uppr env list <app>\nuppr env set <app> <VARIABLE>\nuppr env unset <app> <VARIABLE>\nList shows schema descriptions, examples, and whether values are set without printing secrets. Set reads one value from a hidden terminal prompt or stdin (for example: printf '%s' "$TOKEN" | uppr env set api API_KEY). Unset clears an optional value. Restart the app after changes.`,
   prepare: `uppr prepare [app]\nPrompt for missing required schema variables and create config/.env and data/main.sqlite. Existing values are preserved. Use uppr env list <app> to inspect variable status and uppr env set <app> <VARIABLE> to set optional values.`,
-  install: `uppr install\nValidate and install app systemd units and shared Caddy routes; enable services and start or reload Caddy. Run this after route, port, or manifest changes. Requires Linux, Docker, systemd, and Caddy with rate_limit.`,
+  install: `uppr install\nValidate and install app systemd units and Caddy routes; enable services and start or reload Caddy. Only one launchpad may be installed on a server. If caddy.service is active, review its sites and run uppr deps caddy-switch first.`,
   launch: `uppr launch <name|--all>\nBuild Docker images from current checkouts, start or restart changed services, and wait for readiness. Does not pull from Git.`,
   serve: `uppr serve [launchpad-path] [name]\nCompatibility alias for launch. With no name, serves all apps in the launchpad.`,
   list: `uppr list\nShow each app's state, route, ports, checkout, and next setup step.`,
@@ -1194,7 +1209,7 @@ const topics: Record<string, string> = {
   remove: `uppr remove <name>\nRemove the app from launchpad.json while preserving its checkout. Run uppr install to remove installed routes and service.`,
   push: `uppr push <name> -m <message> [--yes]\nReview local changes, then commit and push the app checkout. Confirmation is required unless --yes is given. Protected config/ and data/ files cannot be tracked.`,
   auth: `uppr auth login|status|logout\nStore, check, or remove a GitHub personal access token for HTTPS Git remotes. SSH remotes use your SSH key.`,
-  deps: `uppr deps check|install|caddy|docker-access\nCheck dependencies, install Linux packages, build Caddy with rate_limit, or add your account to the Docker group. Sign out and back in after docker-access.`,
+  deps: `uppr deps check|install|caddy|docker-access\nuppr deps caddy-switch\nCheck dependencies, install Linux packages, build Caddy with rate_limit, stop and disable a conflicting caddy.service, or add your account to the Docker group. Review any existing Caddy sites before caddy-switch: Uppr uses its own Caddyfile. Then run uppr install from the launchpad. Sign out and back in after docker-access.`,
   doctor: `uppr doctor\nCheck host tools, Docker access, Buildx, Caddy rate_limit, and app preparation.`,
   caddyfile: `uppr caddyfile\nPrint the current launchpad's generated Caddyfile without changing files.`,
   generate: `uppr generate\nWrite local systemd units and Caddyfile for review.`,

@@ -160,6 +160,18 @@ export function installedPads(): Record<string, { id: string; root: string }> {
   }
   return out;
 }
+export function requireSinglePad(
+  root: string,
+  m: Manifest,
+  pads: Record<string, { id: string; root: string }>,
+) {
+  for (const pad of Object.values(pads)) {
+    if (pad.id !== m.id || fs.realpathSync(pad.root) !== fs.realpathSync(root))
+      fail(
+        `launchpad ${pad.id} is already installed at ${pad.root}; run uppr uninstall there before installing another launchpad`,
+      );
+  }
+}
 export function freePort(m: Manifest) {
   const ports = new Set(m.repos.map((r) => r.host_port));
   for (const p of Object.values(installedPads())) {

@@ -1,6 +1,6 @@
 # Uppr
 
-Uppr is a command line tool for deploying independent Docker apps on a Linux host. Each app runs in its own systemd service. A shared Caddy service routes its domains to loopback ports and applies per-client rate limits. Existing Uppr v2 `launchpad.json` files continue to work.
+Uppr is a command line tool for deploying independent Docker apps on a Linux host. Each app runs in its own systemd service. One launchpad can be installed per server. Its Caddy service routes app domains to loopback ports and applies per-client rate limits. Existing Uppr v2 `launchpad.json` files continue to work.
 
 ## Install
 
@@ -11,7 +11,7 @@ make install
 uppr --help
 ```
 
-The launcher goes to `~/.local/bin/uppr` and the bundled program to `~/.local/share/uppr/uppr.js`. Add `~/.local/bin` to `PATH` if needed. Set `PREFIX=/some/path` to install elsewhere. Run `make install` after updating Uppr, then `uppr install` in each installed launchpad to refresh its systemd units.
+The launcher goes to `~/.local/bin/uppr` and the bundled program to `~/.local/share/uppr/uppr.js`. Add `~/.local/bin` to `PATH` if needed. Set `PREFIX=/some/path` to install elsewhere. Run `make install` after updating Uppr, then `uppr install` in the installed launchpad to refresh its systemd units.
 
 On the Linux host, check and install shared dependencies:
 
@@ -22,6 +22,15 @@ uppr deps check
 ```
 
 The host needs Git, Docker, systemd, and Caddy with the `rate_limit` module. The installer supports apt and dnf and may ask for a sudo password. It builds `/usr/local/bin/uppr-caddy` using Go or xcaddy. Use `uppr deps caddy` to rebuild only Caddy. If Docker socket access is denied, run `uppr deps docker-access`, sign out and back in, and retry. Launch apps as the account with Docker access; installed app services run as that account.
+
+If `uppr install` reports that `caddy.service` is active, review the sites it currently serves: Uppr starts a separate `uppr-caddy.service` with its own generated Caddyfile. Move any routes you need into the launchpad first, then run:
+
+```sh
+uppr deps caddy-switch
+uppr install
+```
+
+`caddy-switch` stops and disables `caddy.service`; run it on the Linux server. Existing sites served only by that service will be unavailable after the switch. To replace an installed launchpad, run `uppr uninstall` from the old launchpad before installing the new one.
 
 Application runtimes and packages belong in each app's Dockerfile. Preparation and schema editing can be done on a non-Linux machine; installation and service control require Linux.
 
@@ -106,7 +115,8 @@ uppr env unset api OPTIONAL_KEY # clear an optional value
 | `uppr stop [name]` | Stop one app or all apps. |
 | `uppr caddyfile` | Print generated routes without changing files. |
 | `uppr generate` | Write local Caddyfile and systemd units for review. |
-| `uppr install` | Install or refresh services and routes. |
+| `uppr install` | Install or refresh services and routes for the server's single launchpad. |
+| `uppr deps caddy-switch` | Stop and disable a conflicting `caddy.service`; then run `uppr install`. |
 | `uppr remove <name>` | Remove manifest entry, preserving checkout; run `uppr install` to remove its installed service and route. |
 | `uppr uninstall` | Remove this launchpad's installed services and routes, preserving files. |
 | `uppr doctor` | Check host tools and app preparation. |

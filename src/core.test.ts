@@ -11,6 +11,7 @@ import {
   initPad,
   loadManifest,
   readSchema,
+  requireSinglePad,
   renderCaddy,
   renderUnit,
   saveRepoEnv,
@@ -54,6 +55,18 @@ test("launchpad persists, selects apps, and maps routes", () => {
     ).toContain("ExecStart=/usr/bin/bun /opt/uppr/uppr.js run-app");
   } finally {
     f.cleanup();
+  }
+});
+test("only the registered launchpad can be installed again", () => {
+  const a = fixture(), b = fixture();
+  try {
+    const pads = { [a.m.id]: { id: a.m.id, root: a.root } };
+    expect(() => requireSinglePad(a.root, a.m, pads)).not.toThrow();
+    expect(() => requireSinglePad(b.root, b.m, pads)).toThrow(/uppr uninstall/);
+    expect(() => requireSinglePad(b.root, a.m, pads)).toThrow(/uppr uninstall/);
+  } finally {
+    a.cleanup();
+    b.cleanup();
   }
 });
 test("schema PORT controls the published container port", () => {
