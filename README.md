@@ -23,6 +23,18 @@ uppr deps check
 
 The host needs Git, Docker, systemd, and Caddy with the `rate_limit` module. The installer supports apt and dnf and may ask for a sudo password. It builds `/usr/local/bin/uppr-caddy` using Go or xcaddy. Use `uppr deps caddy` to rebuild only Caddy. If Docker socket access is denied, run `uppr deps docker-access`, sign out and back in, and retry. Launch apps as the account with Docker access; installed app services run as that account.
 
+On a 512 MB host, the Caddy build may be killed by the Linux out-of-memory manager. Uppr limits Go build parallelism, but the compiler still needs more memory. Check `free -h`, `swapon --show`, and `df -h /` first. If no swap is active and at least 2 GB of disk space is free, create temporary swap and retry:
+
+```sh
+sudo fallocate -l 2G /swapfile
+sudo chmod 600 /swapfile
+sudo mkswap /swapfile
+sudo swapon /swapfile
+uppr deps caddy
+```
+
+The swap stays active until reboot. If `/swapfile` already exists, inspect it before running these commands; do not overwrite an existing swap file. After a successful build, `uppr deps check` verifies the installed Caddy module.
+
 If `uppr install` reports that `caddy.service` is active, review the sites it currently serves: Uppr starts a separate `uppr-caddy.service` with its own generated Caddyfile. Move any routes you need into the launchpad first, then run:
 
 ```sh

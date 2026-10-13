@@ -225,9 +225,16 @@ function buildRateLimitCaddy() {
   const binary = path.join(stage, "uppr-caddy");
   try {
     console.log("Building Caddy with the rate_limit module...");
+    if (os.totalmem() < 1024 ** 3)
+      console.log("Low-memory host detected. This build may need at least 2 GB of swap space; see the Uppr README.");
     const args = ["build", "--output", binary, "--with", "github.com/mholt/caddy-ratelimit"];
-    if (which("xcaddy")) run("xcaddy", args, { cwd: stage });
-    else run("go", ["run", "github.com/caddyserver/xcaddy/cmd/xcaddy@latest", ...args], { cwd: stage });
+    const env = {
+      ...process.env,
+      GOMAXPROCS: "1",
+      GOFLAGS: `${process.env.GOFLAGS || ""} -p=1`.trim(),
+    };
+    if (which("xcaddy")) run("xcaddy", args, { cwd: stage, env });
+    else run("go", ["run", "github.com/caddyserver/xcaddy/cmd/xcaddy@latest", ...args], { cwd: stage, env });
     if (!probe(binary, ["list-modules"]).out.split("\n").includes("http.handlers.rate_limit"))
       fail("custom Caddy build lacks the rate_limit module");
     privileged("mkdir", ["-p", "/usr/local/bin"]);
