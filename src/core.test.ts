@@ -18,6 +18,7 @@ import {
   saveManifest,
   saveSchema,
   select,
+  starterSchema,
   unitName,
   validDomain,
 } from "./core.ts";
@@ -95,6 +96,54 @@ test("schema PORT controls the published container port", () => {
   } finally {
     f.cleanup();
   }
+});
+test("explicit schema port binds a custom listen variable and catches missing mapping", () => {
+  const f = fixture();
+  try {
+    const r = {
+      name: "egate", url: "https://example.com/egate.git",
+      domain: "egate.example.com", host_port: 20000, container_port: 3000,
+    };
+    f.m.repos.push(r);
+    const repo = path.join(f.root, "repos", r.name);
+    fs.mkdirSync(path.join(repo, "config"), { recursive: true });
+    fs.writeFileSync(path.join(repo, "Dockerfile"), "FROM scratch\n");
+    const file = path.join(repo, "schema.json");
+    saveSchema(file, { variables: [{ name: "EGATE_PORT", example: "8119", required: false }] });
+    expect(() => containerPort(f.root, r)).toThrow(/schema.json must declare "port"/);
+    saveSchema(file, {
+      port: { variable: "EGATE_PORT" },
+      variables: [{ name: "EGATE_PORT", example: "8119", required: false }],
+    });
+    expect(containerPort(f.root, r)).toBe(8119);
+    fs.writeFileSync(path.join(repo, "config", ".env"), "EGATE_PORT=8120\n");
+    expect(containerPort(f.root, r)).toBe(8120);
+    expect(() => saveRepoEnv(f.root, r, { EGATE_PORT: "invalid" })).toThrow(/EGATE_PORT must be an integer/);
+    expect(containerPort(f.root, r)).toBe(8120);
+    expect(() => saveSchema(file, { port: { variable: "MISSING" }, variables: [] })).toThrow(/schema port/);
+    expect(() => saveSchema(file, {
+      port: { variable: "EGATE_PORT" }, variables: [{ name: "EGATE_PORT", example: "bad" }],
+    })).toThrow(/schema port example/);
+  } finally { f.cleanup(); }
+});
+test("schema generation discovers a single custom port variable", () => {
+  const f = fixture();
+  try {
+    const r = {
+      name: "egate", url: "https://example.com/egate.git",
+      domain: "egate.example.com", host_port: 20000, container_port: 3000,
+    };
+    const repo = path.join(f.root, "repos", r.name);
+    fs.mkdirSync(repo, { recursive: true });
+    fs.writeFileSync(path.join(repo, ".env.example"), "EGATE_PORT=8119\nEGATE_KEY=replace-me\n");
+    const schema = starterSchema(f.root, r);
+    expect(schema.port).toEqual({ variable: "EGATE_PORT" });
+    expect(schema.variables.find((v) => v.name === "EGATE_PORT")).toMatchObject({
+      example: "8119", required: false,
+    });
+    saveSchema(path.join(repo, "schema.json"), schema);
+    expect(containerPort(f.root, r)).toBe(8119);
+  } finally { f.cleanup(); }
 });
 test("schema domains and rate limit drive Caddy routes with safe defaults", () => {
   const f = fixture();

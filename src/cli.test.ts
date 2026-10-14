@@ -219,10 +219,14 @@ test("domains command creates a schema, validates domains, and updates routes", 
     expect(caddy.stdout).toContain("alt.example.com {");
     expect(caddy.stdout).toContain("events 25");
     expect(caddy.stdout).toContain("window 10s");
-    expect(cli(root, "dump").status).toBe(0);
+    expect(cli(root, "teach").status).toBe(0);
     const guide = fs.readFileSync(path.join(root, "UPPR.md"), "utf8");
     expect(guide).toContain("rate_limit");
     expect(guide).toContain("domains");
+    expect(guide).toContain('"port": { "variable": "APP_PORT" }');
+    fs.writeFileSync(path.join(root, "UPPR.md"), "outdated guide\n");
+    expect(cli(root, "teach").status).toBe(0);
+    expect(fs.readFileSync(path.join(root, "UPPR.md"), "utf8")).toBe(guide);
   } finally { fs.rmSync(base, { recursive: true, force: true }); }
 });
 
@@ -232,7 +236,7 @@ test("public IP lookup prints only a validated IPv4 address", async () => {
   expect(lookupPublicIp(async () => new Response("error", { status: 503 }))).rejects.toThrow("HTTP 503");
 });
 
-test("run-app publishes the PORT selected by schema and env", () => {
+test("run-app publishes the custom port selected by schema and env", () => {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), "uppr-port-test-"));
   const root = path.join(base, "pad");
   try {
@@ -245,9 +249,9 @@ test("run-app publishes the PORT selected by schema and env", () => {
     fs.writeFileSync(path.join(repo, "Dockerfile"), "FROM scratch\n");
     fs.writeFileSync(
       path.join(repo, "schema.json"),
-      '{"variables":[{"name":"PORT","example":"8839","required":false}]}\n',
+      '{"port":{"variable":"EGATE_PORT"},"variables":[{"name":"EGATE_PORT","example":"8839","required":false}]}\n',
     );
-    fs.writeFileSync(path.join(repo, "config", ".env"), "PORT=8840\n");
+    fs.writeFileSync(path.join(repo, "config", ".env"), "EGATE_PORT=8840\n");
     const bin = path.join(base, "bin"),
       args = path.join(base, "docker-args");
     fs.mkdirSync(bin);
@@ -271,7 +275,7 @@ test("run-app publishes the PORT selected by schema and env", () => {
     );
     expect(result.status).toBe(0);
     expect(fs.readFileSync(args, "utf8")).toContain("127.0.0.1:20000:8840");
-    expect(fs.readFileSync(args, "utf8")).toContain("PORT=8840");
+    expect(fs.readFileSync(args, "utf8")).toContain("EGATE_PORT=8840");
     fs.writeFileSync(path.join(repo, "config", ".env"), "");
     const fallback = spawnSync(
       "bun",
@@ -288,7 +292,7 @@ test("run-app publishes the PORT selected by schema and env", () => {
     );
     expect(fallback.status).toBe(0);
     expect(fs.readFileSync(args, "utf8")).toContain("127.0.0.1:20000:8839");
-    expect(fs.readFileSync(args, "utf8")).toContain("PORT=8839");
+    expect(fs.readFileSync(args, "utf8")).toContain("EGATE_PORT=8839");
   } finally {
     fs.rmSync(base, { recursive: true, force: true });
   }

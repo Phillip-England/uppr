@@ -52,6 +52,7 @@ import {
   validDomain,
   validPort,
   which,
+  writeAtomic,
   type Manifest,
   type Repo,
   type Schema,
@@ -582,10 +583,10 @@ export async function command(argv: string[]) {
     await restore(args[0], args[1]);
     return;
   }
-  if (cmd === "dump") {
-    if (args.length > 1) fail("usage: uppr dump [directory]");
+  if (cmd === "teach" || cmd === "dump") {
+    if (args.length > 1) fail("usage: uppr teach [directory]");
     const p = path.resolve(args[0] || ".", "UPPR.md");
-    fs.writeFileSync(p, guide);
+    writeAtomic(p, guide);
     console.log("wrote", p);
     return;
   }
@@ -692,11 +693,11 @@ export async function command(argv: string[]) {
     prepareRepo(pad, r);
     const p = repoDir(pad, r);
     const appPort = containerPort(pad, r);
-    const portEnv = readSchema(schemaPath(pad, r)).variables.some(
-      (v) => v.name === "PORT",
-    )
-      ? ["--env", `PORT=${appPort}`]
-      : [];
+    const schema = readSchema(schemaPath(pad, r));
+    const portName = typeof schema.port === "object"
+      ? schema.port.variable
+      : !schema.port && schema.variables.some((v) => v.name === "PORT") ? "PORT" : "";
+    const portEnv = portName ? ["--env", `${portName}=${appPort}`] : [];
     await import("./core.ts").then((x) =>
       x.spawnWait("docker", [
         "run",
@@ -1141,13 +1142,16 @@ Example schema.json:
 
 \`\`\`json
 {
+  "port": { "variable": "APP_PORT" },
   "domains": ["api.example.com"],
   "rate_limit": { "events": 100, "window": "1m", "zone": "dynamic" },
-  "variables": [{ "name": "PORT", "example": "3000", "required": false }]
+  "variables": [{ "name": "APP_PORT", "example": "3000", "required": false }]
 }
 \`\`\`
 
-The domains array is the source for Caddy routes. If it is absent, Uppr uses the launchpad manifest domain for older apps. Rate limiting applies per client IP through the Caddy rate_limit module. Missing rate_limit values default to 100 events per 1m in zone dynamic. Uppr prefixes the generated zone with the launchpad and app IDs to isolate apps. Set the values per application as needed. Each domain routes to the app's loopback host port. DNS must point to the host. After a schema route change, run uppr install.
+Declare the container port explicitly with "port": { "variable": "APP_PORT" }, referencing a variable in the variables array. Replace APP_PORT with the real listen-port environment variable, such as EGATE_PORT. Its example must be the app's default listening port, and the app must listen on that value at 0.0.0.0. Uppr maps Docker to the value in config/.env or the numeric example and passes the resolved value to the container. For apps without a port environment variable, use a numeric "port": 3000. A schema with a *_PORT variable but no port declaration fails before deployment. Dockerfile EXPOSE does not select the mapped port. Older schemas using PORT without an explicit port declaration remain supported.
+
+The domains array is the source for Caddy routes. If it is absent, Uppr uses the launchpad manifest domain for older apps. Rate limiting applies per client IP through the Caddy rate_limit module. Missing rate_limit values default to 100 events per 1m in zone dynamic. Uppr prefixes the generated zone with the launchpad and app IDs to isolate apps. Set the values per application as needed. Each domain routes to the app's loopback host port. DNS must point to the host. After a schema route or port change, run uppr install, then uppr launch --all.
 
 Create or update a schema with uppr schema generate <app>, uppr domains <app> api.example.com,alt.example.com, and uppr schema rate <app> --events 100 --window 1m --zone dynamic. Run uppr ip on the server to see its public IPv4 address for DNS. Schema changes are local Git changes; inspect and push them with uppr push <app> -m "Update routes". Store a GitHub personal access token for HTTPS remotes with uppr auth login; SSH remotes use your SSH key.
 
@@ -1193,18 +1197,18 @@ Host and data
   auth login|status|logout         Manage HTTPS Git token
   backup <archive.tar.gz>          Archive launchpad, including data
   restore <archive> <directory>    Restore into a new directory
-  dump [directory]                 Write the app integration guide
+  teach [directory]                Write or replace UPPR.md
 
 Run uppr help <command> for options and examples. Commands except init, restore,
 deps, auth, ip, and help run from a launchpad or any directory inside it.`;
 
 const topics: Record<string, string> = {
   init: `uppr init <directory>\nCreate a launchpad with launchpad.json, repos/, and systemd/.`,
-  add: `uppr add <git-url> [--name NAME] [--domain DOMAIN] [--port HOST_PORT] [--container-port PORT] [--branch BRANCH]\nRegister an app. The host port is assigned automatically if omitted; the container port defaults to 3000. Then run uppr pull <name>.`,
+  add: `uppr add <git-url> [--name NAME] [--domain DOMAIN] [--port HOST_PORT] [--container-port PORT] [--branch BRANCH]\nRegister an app. The host port is assigned automatically if omitted. The container port comes from schema.json; --container-port is the legacy fallback, defaulting to 3000. Then run uppr pull <name>.`,
   pull: `uppr pull <name|--all>\nClone or fast-forward Git checkouts. This does not build or start apps.`,
   domains: `uppr domains <app> <domain[,domain...]>\nExample: uppr domains api api.example.com,alt.example.com\nSet the app's domains in repos/<app>/schema.json. Run uppr install to apply routes. Point each public domain's DNS at the server IP shown by uppr ip.`,
   ip: `uppr ip\nPrint this server's public IPv4 address. Uses api.ipify.org and requires internet access; no launchpad is needed.`,
-  schema: `uppr schema generate <app> [--from-env FILE] [--force]\nuppr schema show <app>\nuppr schema edit <app>\nuppr schema add <app> <VARIABLE> [--description TEXT] [--example TEXT] [--optional]\nuppr schema remove <app> <VARIABLE>\nuppr schema domains <app> <domain[,domain...]>\nuppr schema rate <app> [--events N] [--window 1m] [--zone dynamic]\nThe schema lives at repos/<app>/schema.json. Edit opens $VISUAL, $EDITOR, or vi and validates the schema when you save. To change domains, run uppr domains api api.example.com,alt.example.com. Run uppr install after changing routes or rate limits.`,
+  schema: `uppr schema generate <app> [--from-env FILE] [--force]\nuppr schema show <app>\nuppr schema edit <app>\nuppr schema add <app> <VARIABLE> [--description TEXT] [--example TEXT] [--optional]\nuppr schema remove <app> <VARIABLE>\nuppr schema domains <app> <domain[,domain...]>\nuppr schema rate <app> [--events N] [--window 1m] [--zone dynamic]\nThe schema lives at repos/<app>/schema.json. Declare its container port as a number or {"variable":"APP_PORT"}; the variable must appear in variables with a numeric example or be set in config/.env. Edit opens $VISUAL, $EDITOR, or vi and validates on save. To change domains, run uppr domains api api.example.com,alt.example.com. Run uppr install after changing routes, rates, or ports.`,
   env: `uppr env list <app>\nuppr env set <app> <VARIABLE>\nuppr env unset <app> <VARIABLE>\nList shows schema descriptions, examples, and whether values are set without printing secrets. Set reads one value from a hidden terminal prompt or stdin (for example: printf '%s' "$TOKEN" | uppr env set api API_KEY). Unset clears an optional value. Restart the app after changes.`,
   prepare: `uppr prepare [app]\nPrompt for missing required schema variables and create config/.env and data/main.sqlite. Existing values are preserved. Use uppr env list <app> to inspect variable status and uppr env set <app> <VARIABLE> to set optional values.`,
   install: `uppr install\nValidate and install app systemd units and Caddy routes; enable services and start or reload Caddy. Only one launchpad may be installed on a server. If caddy.service is active, review its sites and run uppr deps caddy-switch first.`,
@@ -1226,7 +1230,7 @@ const topics: Record<string, string> = {
   uninstall: `uppr uninstall\nRemove this launchpad's installed services and routes. Checkout files and data remain.`,
   backup: `uppr backup <archive.tar.gz>\nStop active app services during archive creation, then restart them. The archive includes secrets and data.`,
   restore: `uppr restore <archive.tar.gz> <directory>\nRestore into a new directory, then run uppr doctor, uppr generate, and uppr install there.`,
-  dump: `uppr dump [directory]\nWrite UPPR.md with application integration instructions.`,
+  teach: `uppr teach [directory]\nWrite or replace UPPR.md with application integration instructions.`,
 };
 function commandHelp(topic?: string) {
   if (!topic) return help;

@@ -67,7 +67,7 @@ uppr curl api /health
 
 Run launchpad commands from its root or any child directory. `uppr` or `uppr help` prints the command index; `uppr help add`, `uppr help domains`, and other command topics show options. `uppr list` shows every app's state, routes, ports, checkout path, and next setup step. `uppr ip` prints the server's public IPv4 address from any directory. Point public domains' DNS at that address.
 
-`uppr add` records a repository but does not clone it. Its options are `--name`, `--domain`, `--port` (host port), `--container-port` (default 3000), and `--branch`. `uppr pull <name>` clones or fast forwards a checkout; `uppr pull --all` updates all of them. Pulling does not start apps. `uppr install` validates and installs systemd units and Caddy routes. `uppr launch <name>` builds and starts from the current checkout, without pulling Git changes; `uppr launch --all` handles all registered apps. `uppr serve [path] [name]` remains as a compatibility alias for launching.
+`uppr add` records a repository but does not clone it. Its options are `--name`, `--domain`, `--port` (host port), `--container-port` (legacy fallback, default 3000), and `--branch`. `uppr pull <name>` clones or fast forwards a checkout; `uppr pull --all` updates all of them. Pulling does not start apps. `uppr install` validates and installs systemd units and Caddy routes. `uppr launch <name>` builds and starts from the current checkout, without pulling Git changes; `uppr launch --all` handles all registered apps. `uppr serve [path] [name]` remains as a compatibility alias for launching.
 
 ## Application contract
 
@@ -77,18 +77,19 @@ A root `schema.json` declares variables, domains, and a rate limit:
 
 ```json
 {
+  "port": { "variable": "APP_PORT" },
   "domains": ["api.example.com"],
   "rate_limit": { "events": 100, "window": "1m", "zone": "dynamic" },
   "variables": [
     { "name": "API_KEY", "description": "Upstream token", "required": true },
-    { "name": "PORT", "example": "3000", "required": false }
+    { "name": "APP_PORT", "example": "3000", "required": false }
   ]
 }
 ```
 
 Variables are required unless `"required": false`. Schema domains override the launchpad manifest domain. Older schemas without `domains` keep using the manifest domain. Rate limiting defaults to 100 requests per client IP in one minute, in zone `dynamic`. Uppr prefixes zone names with the launchpad and app IDs. The Caddy binary must include `github.com/mholt/caddy-ratelimit`.
 
-When the schema declares `PORT`, Uppr uses `PORT` from `config/.env`, or the numeric schema example if unset. Without a schema `PORT`, it uses the `--container-port` value from `uppr add`. Docker maps the app's host port to that container port. Run `uppr install` after changing `PORT` to refresh the port mapping.
+New schemas should declare `port` explicitly. Use `{ "variable": "APP_PORT" }` to reference the app's actual listen-port environment variable, including names such as `EGATE_PORT`; give that variable a numeric `example` matching the app's default. Uppr uses the value from `config/.env` or the example, maps Docker to that port, and passes the resolved value into the container. For an app with a fixed port and no port environment variable, use `"port": 8119`. `uppr schema generate` infers the variable form when its env example has exactly one `PORT` or `*_PORT` variable. An undeclared `*_PORT` variable fails before installation instead of silently mapping to 3000. Dockerfile `EXPOSE` does not select the mapped port. Older schemas with implicit `PORT` or no port variable remain supported through the previous fallback. Run `uppr install` after changing a port to refresh the mapping, then `uppr launch --all`.
 
 ## Schemas and environment
 
@@ -137,7 +138,7 @@ For example, `uppr curl api /items -X POST -H 'Content-Type: application/json' -
 
 `uppr auth login|status|logout` manages a GitHub personal access token for HTTPS Git remotes under `~/.config/uppr/credentials.json`. SSH remotes use your SSH key. `uppr push api -m "Update routes"` shows local changes, asks before committing and pushing, and rejects tracked `config/` or `data/` files. Add `--yes` for an already reviewed noninteractive push.
 
-`uppr backup /safe/location/pad.tar.gz` stops active app services while archiving the launchpad, then restarts them. The archive includes app data and secrets; store it accordingly. `uppr restore /safe/location/pad.tar.gz new-pad` restores to a new directory. After restoring, run `uppr doctor`, `uppr generate`, and `uppr install` there. `uppr dump [directory]` writes an application integration guide named `UPPR.md`.
+`uppr backup /safe/location/pad.tar.gz` stops active app services while archiving the launchpad, then restarts them. The archive includes app data and secrets; store it accordingly. `uppr restore /safe/location/pad.tar.gz new-pad` restores to a new directory. After restoring, run `uppr doctor`, `uppr generate`, and `uppr install` there. `uppr teach [directory]` writes or replaces an application integration guide named `UPPR.md`.
 
 ## Development
 

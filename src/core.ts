@@ -22,6 +22,7 @@ export type Variable = {
 export type RateLimit = { events: number; window: string; zone: string };
 export type Schema = {
   variables: Variable[];
+  port?: number | { variable: string };
   domains?: string[];
   rate_limit?: Partial<RateLimit>;
 };
@@ -376,30 +377,47 @@ export function starterSchema(root: string, r: Repo, fromEnv?: string): Schema {
         .map((x) => x.trim().replace(/^export\s+/, "").split("=")[0].trim())
         .filter((x) => envName.test(x)))]
     : [];
+  const sourceValues = source ? readEnv(fs.readFileSync(source, "utf8")) : {};
+  const portNames = names.filter((name) => name === "PORT" || name.endsWith("_PORT"));
   return {
+    port: portNames.length === 1 ? { variable: portNames[0] } : r.container_port,
     domains: [r.domain],
     rate_limit: { ...defaultRateLimit },
-    variables: names.map((name) => ({ name, description: "", required: true })),
+    variables: names.map((name) => ({
+      name,
+      description: "",
+      ...(name === portNames[0] && portNames.length === 1
+        ? { example: sourceValues[name] || "", required: !sourceValues[name] }
+        : { required: true }),
+    })),
   };
 }
 export function containerPort(root: string, r: Repo) {
   const file = schemaPath(root, r);
   if (!exists(file)) return r.container_port;
-  const port = readSchema(file).variables.find((v) => v.name === "PORT");
-  if (!port) return r.container_port;
+  const schema = readSchema(file);
+  if (typeof schema.port === "number") return schema.port;
+  const name = schema.port?.variable || (schema.variables.some((v) => v.name === "PORT") ? "PORT" : "");
+  if (!name) {
+    const candidates = schema.variables.filter((v) => v.name.endsWith("_PORT"));
+    if (candidates.length)
+      fail(`${r.name}: schema.json must declare "port": { "variable": "${candidates[0].name}" } (or a numeric port) to map the container port`);
+    return r.container_port;
+  }
+  const port = schema.variables.find((v) => v.name === name)!;
   const env = path.join(repoDir(root, r), "config", ".env");
   const configured = exists(env)
-    ? readEnv(fs.readFileSync(env, "utf8")).PORT?.trim()
+    ? readEnv(fs.readFileSync(env, "utf8"))[name]?.trim()
     : undefined;
   const value = configured || port.example?.trim();
   if (!value)
     fail(
-      `${r.name}: set PORT in config/.env or provide a numeric PORT example in schema.json`,
+      `${r.name}: set ${name} in config/.env or provide a numeric ${name} example in schema.json`,
     );
   const number = Number(value);
   if (!/^\d+$/.test(value) || !validPort(number))
     fail(
-      `${r.name}: PORT must be an integer from 1 to 65535 (got ${JSON.stringify(value)})`,
+      `${r.name}: ${name} must be an integer from 1 to 65535 (got ${JSON.stringify(value)})`,
     );
   return number;
 }
@@ -413,6 +431,22 @@ export function validateSchema(s: Schema) {
     names.add(v.name);
     if (v.required !== undefined && typeof v.required !== "boolean")
       fail(`${v.name}: required must be boolean`);
+  }
+  if (s.port !== undefined) {
+    if (typeof s.port === "number") {
+      if (!validPort(s.port)) fail("schema port must be an integer from 1 to 65535");
+    } else if (
+      !s.port || typeof s.port !== "object" || Array.isArray(s.port) ||
+      Object.keys(s.port).length !== 1 || !envName.test(s.port.variable) ||
+      !names.has(s.port.variable)
+    ) fail('schema port must be a valid number or { "variable": "DECLARED_NAME" }');
+    if (typeof s.port === "object") {
+      const portVariable = s.port.variable;
+      const example = s.variables.find((v) => v.name === portVariable)?.example;
+      if (example !== undefined && example !== "" &&
+        (!/^\d+$/.test(example) || !validPort(Number(example))))
+        fail(`${portVariable}: schema port example must be an integer from 1 to 65535`);
+    }
   }
   if (s.domains !== undefined) {
     if (!Array.isArray(s.domains) || !s.domains.length)
@@ -513,12 +547,13 @@ export function saveRepoEnv(
     fail(
       `${r.name}: required values missing in config/.env: ${missing.join(", ")}; run uppr prepare ${r.name}`,
     );
-  if (schema.variables.some((v) => v.name === "PORT")) {
-    const value =
-      values.PORT?.trim() ||
-      schema.variables.find((v) => v.name === "PORT")?.example?.trim();
+  if (typeof schema.port === "object" || (!schema.port && schema.variables.some((v) => v.name === "PORT"))) {
+    const name = typeof schema.port === "object" ? schema.port.variable : "PORT";
+    const value = values[name]?.trim() || schema.variables.find((v) => v.name === name)?.example?.trim();
     if (!value || !/^\d+$/.test(value) || !validPort(Number(value)))
-      fail(`${r.name}: set a valid PORT in config/.env or schema.json`);
+      fail(`${r.name}: ${name} must be an integer from 1 to 65535 in config/.env or schema.json`);
+  } else if (schema.port === undefined && schema.variables.some((v) => v.name.endsWith("_PORT"))) {
+    fail(`${r.name}: schema.json must declare a port mapping for its *_PORT variable`);
   }
   protect(
     p,
