@@ -28,6 +28,7 @@ test("no arguments and command help work outside a launchpad", () => {
     expect(cli(base, "domains", "--help").stdout).toContain("uppr domains <app>");
     expect(cli(base, "ip", "--help").stdout).toContain("uppr ip");
     expect(cli(base, "deps", "--help").stdout).toContain("uppr deps caddy-switch");
+    expect(cli(base, "pull", "--help").stdout).toContain("[--ff]");
   } finally { fs.rmSync(base, { recursive: true, force: true }); }
 });
 test("environment commands show metadata and set values without printing them", () => {
@@ -363,6 +364,28 @@ test("pull --all updates all checkouts and pull <name> updates only one", () => 
     expect(
       fs.readFileSync(path.join(root, "repos", "two", "version.txt"), "utf8"),
     ).toBe("first\n");
+    const checkout = path.join(root, "repos", "one");
+    fs.writeFileSync(path.join(checkout, "version.txt"), "local commit\n");
+    git(checkout, "commit", "-am", "local commit");
+    fs.writeFileSync(path.join(checkout, "version.txt"), "uncommitted edit\n");
+    fs.writeFileSync(path.join(checkout, "scratch.txt"), "remove me\n");
+    fs.mkdirSync(path.join(checkout, "config"));
+    fs.writeFileSync(path.join(checkout, "config", ".env"), "SECRET=keep\n");
+    fs.writeFileSync(path.join(checkout, "data", "main.sqlite"), "keep data\n");
+    const source = path.join(base, "one-source");
+    fs.writeFileSync(path.join(source, "version.txt"), "third\n");
+    git(source, "commit", "-am", "third");
+    git(source, "push", "origin", "main");
+    expect(cli(root, "pull", "one").status).not.toBe(0);
+    expect(cli(root, "pull", "one", "--ff").status).toBe(0);
+    expect(git(checkout, "rev-parse", "HEAD")).toBe(git(source, "rev-parse", "HEAD"));
+    expect(fs.readFileSync(path.join(checkout, "version.txt"), "utf8")).toBe("third\n");
+    expect(fs.existsSync(path.join(checkout, "scratch.txt"))).toBe(false);
+    expect(fs.readFileSync(path.join(checkout, "config", ".env"), "utf8")).toBe("SECRET=keep\n");
+    expect(fs.readFileSync(path.join(checkout, "data", "main.sqlite"), "utf8")).toBe("keep data\n");
+    expect(cli(root, "pull", "--ff", "--all").status).toBe(0);
+    expect(fs.readFileSync(path.join(root, "repos", "two", "version.txt"), "utf8")).toBe("second\n");
+    expect(cli(root, "pull", "one", "--unknown").status).not.toBe(0);
   } finally {
     fs.rmSync(base, { recursive: true, force: true });
   }

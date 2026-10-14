@@ -462,7 +462,7 @@ function git(root: string, args: string[]) {
     if (dir) fs.rmSync(dir, { recursive: true, force: true });
   }
 }
-function pull(root: string, r: Repo) {
+function pull(root: string, r: Repo, forceFresh = false) {
   const p = repoDir(root, r);
   if (!exists(path.join(p, ".git"))) {
     if (exists(p)) fail(`${p} exists without .git`);
@@ -473,6 +473,19 @@ function pull(root: string, r: Repo) {
       r.url,
       p,
     ]);
+  } else if (forceFresh) {
+    const upstream = probe("git", ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"], p);
+    if (!upstream.ok || !upstream.out)
+      fail(`${r.name} has no upstream branch; configure one before using pull --ff`);
+    git(p, ["fetch"]);
+    const localProtected = probe("git", ["ls-files", "--", "config", "data"], p);
+    const remoteProtected = probe("git", ["ls-tree", "-r", "--name-only", upstream.out, "--", "config", "data"], p);
+    if (!localProtected.ok || !remoteProtected.ok)
+      fail(`${r.name}: could not check protected config/ and data/ files`);
+    if (localProtected.out || remoteProtected.out)
+      fail(`${r.name}: config/ or data/ is tracked by Git; pull --ff would overwrite protected files`);
+    git(p, ["reset", "--hard", upstream.out]);
+    git(p, ["clean", "-fd", "-e", "/config/", "-e", "/data/"]);
   } else git(p, ["pull", "--ff-only"]);
   protectRepo(p);
   fs.mkdirSync(path.join(p, "data"), { recursive: true, mode: 0o700 });
@@ -889,10 +902,12 @@ export async function command(argv: string[]) {
     return;
   }
   if (cmd === "pull") {
-    if (args.length !== 1) fail("usage: uppr pull <name|--all>");
-    for (const r of select(m, args[0] === "--all" ? undefined : args[0])) {
+    const target = args.filter((arg) => arg !== "--ff");
+    if (target.length !== 1 || (target[0].startsWith("--") && target[0] !== "--all") || args.length > 2)
+      fail("usage: uppr pull <name|--all> [--ff]");
+    for (const r of select(m, target[0] === "--all" ? undefined : target[0])) {
       console.log("pulling", r.name);
-      pull(root, r);
+      pull(root, r, args.includes("--ff"));
       console.log("pulled", r.name);
     }
     return;
@@ -1207,7 +1222,7 @@ Start here
   init <directory>                 Create a launchpad
   deps check|install               Check or install Linux host dependencies
   add <git-url> [options]          Register an app
-  pull <name|--all>                Clone or fast-forward checkouts
+  pull <name|--all> [--ff]         Clone or update checkouts
   schema generate <name>           Create an app schema
   domains <name> <domain,...>      Set domains in the app's schema.json
   schema edit <name>               Open schema.json in your editor
@@ -1247,7 +1262,7 @@ deps, auth, ip, and help run from a launchpad or any directory inside it.`;
 const topics: Record<string, string> = {
   init: `uppr init <directory>\nCreate a launchpad with launchpad.json, repos/, and systemd/.`,
   add: `uppr add <git-url> [--name NAME] [--domain DOMAIN] [--port HOST_PORT] [--container-port PORT] [--branch BRANCH]\nRegister an app. The host port is assigned automatically if omitted. The container port comes from schema.json; --container-port is the legacy fallback, defaulting to 3000. Then run uppr pull <name>.`,
-  pull: `uppr pull <name|--all>\nClone or fast-forward Git checkouts. This does not build or start apps.`,
+  pull: `uppr pull <name|--all> [--ff]\nClone or fast-forward Git checkouts. --ff fetches and resets each checkout to its upstream branch, discarding local commits and tracked changes and removing untracked files. config/ and data/ are preserved. This does not build or start apps.`,
   domains: `uppr domains <app> <domain[,domain...]>\nExample: uppr domains api api.example.com,alt.example.com\nSet the app's domains in repos/<app>/schema.json. Run uppr install to apply routes. Point each public domain's DNS at the server IP shown by uppr ip.`,
   ip: `uppr ip\nPrint this server's public IPv4 address. Uses api.ipify.org and requires internet access; no launchpad is needed.`,
   schema: `uppr schema generate <app> [--from-env FILE] [--force]\nuppr schema show <app>\nuppr schema edit <app>\nuppr schema add <app> <VARIABLE> [--description TEXT] [--example TEXT] [--optional]\nuppr schema remove <app> <VARIABLE>\nuppr schema domains <app> <domain[,domain...]>\nuppr schema rate <app> [--events N] [--window 1m] [--zone dynamic]\nThe schema lives at repos/<app>/schema.json. Declare its container port as a number or {"variable":"APP_PORT"}; the variable must appear in variables with a numeric example or be set in config/.env. Edit opens $VISUAL, $EDITOR, or vi and validates on save. To change domains, run uppr domains api api.example.com,alt.example.com. Run uppr install after changing routes, rates, or ports.`,
