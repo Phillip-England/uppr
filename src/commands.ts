@@ -403,6 +403,37 @@ function uninstallHost(m: Manifest) {
     fs.rmSync(stage, { recursive: true, force: true });
   }
 }
+async function deleteRepo(root: string, m: Manifest, r: Repo) {
+  const checkout = repoDir(root, r);
+  const pads = readRegistry();
+  if (pads[m.id] && fs.realpathSync(pads[m.id].root) !== fs.realpathSync(root))
+    fail(`launchpad ${m.id} is installed at ${pads[m.id].root}; delete it there`);
+  const installed = !!pads[m.id];
+  const original = m.repos;
+  const remaining = m.repos.filter((repo) => repo.name !== r.name);
+  const localCaddy = renderCaddy(root, { ...m, repos: remaining });
+  m.repos = remaining;
+  saveManifest(root, m);
+  try {
+    if (installed) await installHost(root, m);
+  } catch (error) {
+    m.repos = original;
+    saveManifest(root, m);
+    throw error;
+  }
+  if (process.platform === "linux" && which("docker")) {
+    const container = containerName(m, r);
+    const image = imageName(m, r);
+    if (probe("docker", ["container", "inspect", container]).ok)
+      run("docker", ["rm", "-f", container]);
+    if (probe("docker", ["image", "inspect", image]).ok)
+      run("docker", ["image", "rm", image]);
+  }
+  fs.rmSync(checkout, { recursive: true, force: true });
+  fs.rmSync(path.join(root, "systemd", unitName(m, r)), { force: true });
+  fs.writeFileSync(path.join(root, "Caddyfile"), localCaddy);
+  console.log(`deleted ${r.name}: registration, deployment, image, and checkout`);
+}
 function shellQuote(value: string) {
   return `'${value.replaceAll("'", `'"'"'`)}'`;
 }
@@ -847,6 +878,16 @@ export async function command(argv: string[]) {
     );
     return;
   }
+  if (cmd === "delete") {
+    if (args.length < 1 || args.length > 2 || (args.length === 2 && args[1] !== "--yes"))
+      fail("usage: uppr delete <name> [--yes]");
+    const r = select(m, args[0])[0];
+    const checkout = repoDir(root, r);
+    if (args[1] !== "--yes" && !confirm(`Delete ${r.name}, including ${checkout} and its data?`))
+      fail("delete canceled");
+    await deleteRepo(root, m, r);
+    return;
+  }
   if (cmd === "pull") {
     if (args.length !== 1) fail("usage: uppr pull <name|--all>");
     for (const r of select(m, args[0] === "--all" ? undefined : args[0])) {
@@ -1186,6 +1227,7 @@ Manage apps
   restart <name> | stop [name]     Control app services
   push <name> -m <message>         Commit and push a checkout
   remove <name>                   Unregister an app; preserve its files
+  delete <name> [--yes]           Delete an app, its checkout, and deployment
 
 Host and data
   ip                               Show this server's public IPv4 address
@@ -1221,6 +1263,7 @@ const topics: Record<string, string> = {
   restart: `uppr restart <name>\nRebuild the app image, restart its service, and wait for readiness.`,
   stop: `uppr stop [name]\nStop one app or all apps in the launchpad.`,
   remove: `uppr remove <name>\nRemove the app from launchpad.json while preserving its checkout. Run uppr install to remove installed routes and service.`,
+  delete: `uppr delete <name> [--yes]\nRemove the app registration, installed service and route, Docker container and image, and checkout including config/ and data/. Prompts for confirmation; use --yes in scripts. This cannot be undone.`,
   push: `uppr push <name> -m <message> [--yes]\nReview local changes, then commit and push the app checkout. Confirmation is required unless --yes is given. Protected config/ and data/ files cannot be tracked.`,
   auth: `uppr auth login|status|logout\nStore, check, or remove a GitHub personal access token for HTTPS Git remotes. SSH remotes use your SSH key.`,
   deps: `uppr deps check|install|caddy|docker-access\nuppr deps caddy-switch\nCheck dependencies, install Linux packages, build Caddy with rate_limit, stop and disable a conflicting caddy.service, or add your account to the Docker group. Review any existing Caddy sites before caddy-switch: Uppr uses its own Caddyfile. Then run uppr install from the launchpad. Sign out and back in after docker-access.`,

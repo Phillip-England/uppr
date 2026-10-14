@@ -51,6 +51,25 @@ test("environment commands show metadata and set values without printing them", 
     expect(cli(root, "env", "list", "api").stdout).toContain("TOKEN · optional · empty");
   } finally { fs.rmSync(base, { recursive: true, force: true }); }
 });
+test("delete removes a checkout and registration only after confirmation", () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "uppr-delete-test-"));
+  const root = path.join(base, "pad");
+  try {
+    expect(cli(base, "init", root).status).toBe(0);
+    expect(cli(root, "add", "https://example.com/api.git", "--name", "api").status).toBe(0);
+    const repo = path.join(root, "repos", "api");
+    fs.mkdirSync(path.join(repo, "data"), { recursive: true });
+    fs.writeFileSync(path.join(repo, "data", "main.sqlite"), "private data");
+    expect(cli(root, "delete", "api").status).toBe(1);
+    expect(fs.existsSync(repo)).toBe(true);
+    expect(cli(root, "delete", "api", "--bad").status).toBe(1);
+    expect(cli(root, "delete", "api", "--yes").status).toBe(0);
+    expect(fs.existsSync(repo)).toBe(false);
+    expect(JSON.parse(fs.readFileSync(path.join(root, "launchpad.json"), "utf8")).repos).toEqual([]);
+    expect(fs.readFileSync(path.join(root, "Caddyfile"), "utf8")).not.toContain("api.localhost");
+    expect(cli(root, "list").stdout).toContain("No apps registered");
+  } finally { fs.rmSync(base, { recursive: true, force: true }); }
+});
 test("dependency check reports the host services needed to launch apps", () => {
   const result = cli(process.cwd(), "deps", "check");
   expect(result.stdout).toContain("Linux and systemd");

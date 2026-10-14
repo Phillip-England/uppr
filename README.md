@@ -131,10 +131,13 @@ uppr env unset api OPTIONAL_KEY # clear an optional value
 | `uppr install` | Install or refresh services and routes for the server's single launchpad. |
 | `uppr deps caddy-switch` | Stop and disable a conflicting `caddy.service`; then run `uppr install`. |
 | `uppr remove <name>` | Remove manifest entry, preserving checkout; run `uppr install` to remove its installed service and route. |
+| `uppr delete <name> [--yes]` | Permanently remove the app, its installed service and route, Docker container and image, and checkout including config and data. |
 | `uppr uninstall` | Remove this launchpad's installed services and routes, preserving files. |
 | `uppr doctor` | Check host tools and app preparation. |
 
 For example, `uppr curl api /items -X POST -H 'Content-Type: application/json' -d '{"name":"example"}'` passes the options to curl and streams its response. Uppr prints the curl command before running it.
+
+`uppr delete` asks for confirmation before deleting local data. Pass `--yes` for a noninteractive script. The remote Git repository is unaffected.
 
 `uppr auth login|status|logout` manages a GitHub personal access token for HTTPS Git remotes under `~/.config/uppr/credentials.json`. SSH remotes use your SSH key. `uppr push api -m "Update routes"` shows local changes, asks before committing and pushing, and rejects tracked `config/` or `data/` files. Add `--yes` for an already reviewed noninteractive push.
 
