@@ -36,7 +36,7 @@ test("environment commands show metadata and set values without printing them", 
   const root = path.join(base, "pad");
   try {
     expect(cli(base, "init", root).status).toBe(0);
-    expect(cli(root, "add", "https://example.com/api.git", "--name", "api").status).toBe(0);
+    expect(cli(root, "add", "https://example.com/api.git", "--name", "api", "--domain", "api.example.com").status).toBe(0);
     const repo = path.join(root, "repos", "api");
     fs.mkdirSync(repo);
     fs.writeFileSync(path.join(repo, "Dockerfile"), "FROM scratch\n");
@@ -52,12 +52,36 @@ test("environment commands show metadata and set values without printing them", 
     expect(cli(root, "env", "list", "api").stdout).toContain("TOKEN · optional · empty");
   } finally { fs.rmSync(base, { recursive: true, force: true }); }
 });
+test("registration and runtime require explicit domain and environment setup", () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "uppr-setup-gate-"));
+  const root = path.join(base, "pad");
+  try {
+    expect(cli(base, "init", root).status).toBe(0);
+    const missingDomain = cli(root, "add", "https://example.com/api.git", "--name", "api");
+    expect(missingDomain.status).toBe(1);
+    expect(missingDomain.stderr).toContain("--domain");
+    expect(JSON.parse(fs.readFileSync(path.join(root, "launchpad.json"), "utf8")).repos).toEqual([]);
+    expect(cli(root, "add", "https://example.com/api.git", "--name", "api", "--domain", "api.example.com").status).toBe(0);
+    const repo = path.join(root, "repos", "api");
+    fs.mkdirSync(repo);
+    fs.writeFileSync(path.join(repo, "Dockerfile"), "FROM scratch\n");
+    const schema = path.join(repo, "schema.json");
+    fs.writeFileSync(schema, JSON.stringify({ variables: [{ name: "TOKEN" }] }));
+    expect(cli(root, "run-app", root, "api").stderr).toContain("domains are not configured");
+    fs.writeFileSync(schema, JSON.stringify({ domains: ["api.example.com"], variables: [{ name: "TOKEN" }] }));
+    expect(cli(root, "run-app", root, "api").stderr).toContain("config/.env is missing");
+    expect(fs.existsSync(path.join(repo, "config", ".env"))).toBe(false);
+    fs.mkdirSync(path.join(repo, "config"));
+    fs.writeFileSync(path.join(repo, "config", ".env"), "TOKEN=\n");
+    expect(cli(root, "run-app", root, "api").stderr).toContain("required values missing");
+  } finally { fs.rmSync(base, { recursive: true, force: true }); }
+});
 test("delete removes a checkout and registration only after confirmation", () => {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), "uppr-delete-test-"));
   const root = path.join(base, "pad");
   try {
     expect(cli(base, "init", root).status).toBe(0);
-    expect(cli(root, "add", "https://example.com/api.git", "--name", "api").status).toBe(0);
+    expect(cli(root, "add", "https://example.com/api.git", "--name", "api", "--domain", "api.example.com").status).toBe(0);
     const repo = path.join(root, "repos", "api");
     fs.mkdirSync(path.join(repo, "data"), { recursive: true });
     fs.writeFileSync(path.join(repo, "data", "main.sqlite"), "private data");
@@ -131,7 +155,7 @@ test("schema edit rejects an invalid live schema without changing it", () => {
   try {
     expect(cli(base, "init", root).status).toBe(0);
     expect(
-      cli(root, "add", "https://example.com/api.git", "--name", "api").status,
+      cli(root, "add", "https://example.com/api.git", "--name", "api", "--domain", "api.example.com").status,
     ).toBe(0);
     const repo = path.join(root, "repos", "api");
     fs.mkdirSync(repo);
@@ -173,13 +197,15 @@ test("curl shows its request and response, and caddyfile is readable without gen
         "api",
         "--port",
         "24242",
+        "--domain",
+        "api.example.com",
       ).status,
     ).toBe(0);
     expect(cli(root, "pull").status).toBe(1);
     const localCaddy = fs.readFileSync(path.join(root, "Caddyfile"), "utf8");
     const caddy = cli(root, "caddyfile");
     expect(caddy.status).toBe(0);
-    expect(caddy.stdout).toContain("api.localhost {");
+    expect(caddy.stdout).toContain("api.example.com {");
     expect(caddy.stdout).toContain("reverse_proxy 127.0.0.1:24242");
     expect(fs.readFileSync(path.join(root, "Caddyfile"), "utf8")).toBe(
       localCaddy,
@@ -224,7 +250,7 @@ test("domains command creates a schema, validates domains, and updates routes", 
   const root = path.join(base, "pad");
   try {
     expect(cli(base, "init", root).status).toBe(0);
-    expect(cli(root, "add", "https://example.com/api.git", "--name", "api").status).toBe(0);
+    expect(cli(root, "add", "https://example.com/api.git", "--name", "api", "--domain", "api.example.com").status).toBe(0);
     fs.mkdirSync(path.join(root, "repos", "api"));
     expect(cli(root, "domains", "api", "api.example.com,alt.example.com").status).toBe(0);
     const schemaPath = path.join(root, "repos", "api", "schema.json");
@@ -262,14 +288,14 @@ test("run-app publishes the custom port selected by schema and env", () => {
   try {
     expect(cli(base, "init", root).status).toBe(0);
     expect(
-      cli(root, "add", "https://example.com/api.git", "--name", "api").status,
+      cli(root, "add", "https://example.com/api.git", "--name", "api", "--domain", "api.example.com").status,
     ).toBe(0);
     const repo = path.join(root, "repos", "api");
     fs.mkdirSync(path.join(repo, "config"), { recursive: true });
     fs.writeFileSync(path.join(repo, "Dockerfile"), "FROM scratch\n");
     fs.writeFileSync(
       path.join(repo, "schema.json"),
-      '{"port":{"variable":"EGATE_PORT"},"variables":[{"name":"EGATE_PORT","example":"8839","required":false}]}\n',
+      '{"port":{"variable":"EGATE_PORT"},"domains":["api.example.com"],"variables":[{"name":"EGATE_PORT","example":"8839","required":false}]}\n',
     );
     fs.writeFileSync(path.join(repo, "config", ".env"), "EGATE_PORT=8840\n");
     const bin = path.join(base, "bin"),
@@ -348,7 +374,7 @@ test("pull --all updates all checkouts and pull <name> updates only one", () => 
       const remote = path.join(base, `${name}.git`);
       git(base, "clone", "--bare", source, remote);
       git(source, "remote", "add", "origin", remote);
-      expect(cli(root, "add", remote, "--name", name).status).toBe(0);
+      expect(cli(root, "add", remote, "--name", name, "--domain", `${name}.example.com`).status).toBe(0);
     }
     expect(cli(root, "pull", "--all").status).toBe(0);
     for (const name of ["one", "two"]) {

@@ -304,9 +304,9 @@ export function appSetup(
       detail: "Generate a schema from an env example, then review it.",
       action: "schema-generate",
     };
-  let variables: Variable[];
+  let schemaConfig: Schema;
   try {
-    variables = readSchema(schema).variables;
+    schemaConfig = readSchema(schema);
   } catch (error) {
     return {
       label: "Schema error",
@@ -314,9 +314,15 @@ export function appSetup(
       action: "schema-edit",
     };
   }
+  if (!schemaConfig.domains)
+    return {
+      label: "Needs domains",
+      detail: "Set the app's domains in schema.json.",
+      action: "domains",
+    };
   const env = path.join(p, "config", ".env");
   const values = exists(env) ? readEnv(fs.readFileSync(env, "utf8")) : {};
-  const missing = variables
+  const missing = schemaConfig.variables
     .filter((v) => v.required !== false && !values[v.name]?.trim())
     .map((v) => v.name);
   if (!exists(env) || missing.length)
@@ -596,6 +602,27 @@ export function prepareRepo(
     if (value) updates[v.name] = value;
   }
   saveRepoEnv(root, r, updates);
+}
+export function requireRepoReady(root: string, r: Repo) {
+  const p = repoDir(root, r);
+  if (!exists(path.join(p, "Dockerfile")))
+    fail(`${r.name}: Dockerfile is missing; run uppr pull ${r.name}`);
+  const file = schemaPath(root, r);
+  if (!exists(file))
+    fail(`${r.name}: schema.json is missing; run uppr schema generate ${r.name}`);
+  const schema = readSchema(file);
+  if (!schema.domains)
+    fail(`${r.name}: domains are not configured; run uppr domains ${r.name} <domain[,domain...]>`);
+  const env = path.join(p, "config", ".env");
+  if (!exists(env))
+    fail(`${r.name}: config/.env is missing; run uppr prepare ${r.name}`);
+  const values = readEnv(fs.readFileSync(env, "utf8"));
+  const missing = schema.variables
+    .filter((v) => v.required !== false && !values[v.name]?.trim())
+    .map((v) => v.name);
+  if (missing.length)
+    fail(`${r.name}: required values missing in config/.env: ${missing.join(", ")}; run uppr prepare ${r.name}`);
+  containerPort(root, r);
 }
 export function renderCaddy(root: string, m: Manifest) {
   return (

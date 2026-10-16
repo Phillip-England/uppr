@@ -241,6 +241,11 @@ test("setup guidance advances from checkout through environment", () => {
     saveSchema(path.join(repo, "schema.json"), {
       variables: [{ name: "API_KEY" }],
     });
+    expect(appSetup(f.root, r, status).action).toBe("domains");
+    saveSchema(path.join(repo, "schema.json"), {
+      domains: ["api.example.com"],
+      variables: [{ name: "API_KEY" }],
+    });
     expect(appSetup(f.root, r, status).action).toBe("env-setup");
     saveRepoEnv(f.root, r, { API_KEY: "secret" });
     expect(appSetup(f.root, r, status).action).toBe(

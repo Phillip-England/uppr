@@ -32,6 +32,7 @@ import {
   probe,
   readSchema,
   readEnv,
+  requireRepoReady,
   requireSinglePad,
   registryDir,
   renderCaddyUnit,
@@ -174,7 +175,7 @@ function imageId(m: Manifest, r: Repo) {
   ]).out;
 }
 function buildApp(root: string, m: Manifest, r: Repo) {
-  prepareRepo(root, r);
+  requireRepoReady(root, r);
   run("docker", ["build", "-t", imageName(m, r), repoDir(root, r)]);
 }
 async function ready(m: Manifest, r: Repo) {
@@ -271,7 +272,7 @@ async function installHost(root: string, m: Manifest) {
     fail(
       "caddy.service is active or enabled; review its sites, then run uppr deps caddy-switch to stop and disable it before rerunning uppr install",
     );
-  for (const r of m.repos) prepareRepo(root, r);
+  for (const r of m.repos) requireRepoReady(root, r);
   generate(root, m);
   const caddy = rateLimitCaddy();
   if (!which("docker")) fail("docker is required; run uppr deps install");
@@ -734,7 +735,7 @@ export async function command(argv: string[]) {
     const pad = path.resolve(args[0]),
       man = loadManifest(pad),
       r = select(man, args[1])[0];
-    prepareRepo(pad, r);
+    requireRepoReady(pad, r);
     const p = repoDir(pad, r);
     const appPort = containerPort(pad, r);
     const schema = readSchema(schemaPath(pad, r));
@@ -792,6 +793,7 @@ export async function command(argv: string[]) {
         pull: `uppr pull ${r.name}`,
         "schema-generate": `uppr schema generate ${r.name}`,
         "schema-edit": `uppr schema edit ${r.name}`,
+        domains: `uppr domains ${r.name} ${r.domain}`,
         "env-setup": `uppr prepare ${r.name}`,
         install: "uppr install",
         serve: `uppr launch ${r.name}`,
@@ -848,10 +850,11 @@ export async function command(argv: string[]) {
           .basename(url)
           .replace(/\.git$/, "")
           .toLowerCase(),
-      domain = option(args, "--domain") || `${name}.localhost`,
+      domain = option(args, "--domain"),
       port = Number(option(args, "--port") || freePort(m)),
       container = Number(option(args, "--container-port") || 3000),
       branch = option(args, "--branch") || "";
+    if (!domain) fail("a domain is required; use --domain <domain>");
     if (
       !safeName.test(name) ||
       !validDomain(domain) ||
@@ -994,6 +997,7 @@ export async function command(argv: string[]) {
       name = args[1];
     } else if (args.length > 2) fail("usage: uppr serve [path] [name]");
     const repos = select(targetM, name);
+    for (const r of repos) requireRepoReady(targetRoot, r);
     console.log("Checking services and Docker...");
     requireInstalled(targetM, repos);
     dockerAccess();
@@ -1083,7 +1087,7 @@ export async function command(argv: string[]) {
     }
     for (const r of sorted(m)) {
       try {
-        prepareRepo(root, r);
+        requireRepoReady(root, r);
         console.log("READY", r.name);
       } catch (e) {
         console.log("NOT READY", r.name, (e as Error).message);
@@ -1207,7 +1211,7 @@ Example schema.json:
 
 Declare the container port explicitly with "port": { "variable": "APP_PORT" }, referencing a variable in the variables array. Replace APP_PORT with the real listen-port environment variable, such as EGATE_PORT. Its example must be the app's default listening port, and the app must listen on that value at 0.0.0.0. Uppr maps Docker to the value in config/.env or the numeric example and passes the resolved value to the container. For apps without a port environment variable, use a numeric "port": 3000. A schema with a *_PORT variable but no port declaration fails before deployment. Dockerfile EXPOSE does not select the mapped port. Older schemas using PORT without an explicit port declaration remain supported.
 
-The domains array is the source for Caddy routes. If it is absent, Uppr uses the launchpad manifest domain for older apps. Rate limiting applies per client IP through the Caddy rate_limit module. Missing rate_limit values default to 100 events per 1m in zone dynamic. Uppr prefixes the generated zone with the launchpad and app IDs to isolate apps. Set the values per application as needed. Each domain routes to the app's loopback host port. DNS must point to the host. After a schema route or port change, run uppr install, then uppr launch --all.
+The domains array is the source for Caddy routes. Set it before installation or launch. Run uppr prepare <app> to create config/.env and fill all required variables before deployment. Rate limiting applies per client IP through the Caddy rate_limit module. Missing rate_limit values default to 100 events per 1m in zone dynamic. Uppr prefixes the generated zone with the launchpad and app IDs to isolate apps. Set the values per application as needed. Each domain routes to the app's loopback host port. DNS must point to the host. After a schema route or port change, run uppr install, then uppr launch --all.
 
 Create or update a schema with uppr schema generate <app>, uppr domains <app> api.example.com,alt.example.com, and uppr schema rate <app> --events 100 --window 1m --zone dynamic. Run uppr ip on the server to see its public IPv4 address for DNS. Schema changes are local Git changes; inspect and push them with uppr push <app> -m "Update routes". Store a GitHub personal access token for HTTPS remotes with uppr auth login; SSH remotes use your SSH key.
 
@@ -1261,7 +1265,7 @@ deps, auth, ip, and help run from a launchpad or any directory inside it.`;
 
 const topics: Record<string, string> = {
   init: `uppr init <directory>\nCreate a launchpad with launchpad.json, repos/, and systemd/.`,
-  add: `uppr add <git-url> [--name NAME] [--domain DOMAIN] [--port HOST_PORT] [--container-port PORT] [--branch BRANCH]\nRegister an app. The host port is assigned automatically if omitted. The container port comes from schema.json; --container-port is the legacy fallback, defaulting to 3000. Then run uppr pull <name>.`,
+  add: `uppr add <git-url> [--name NAME] --domain DOMAIN [--port HOST_PORT] [--container-port PORT] [--branch BRANCH]\nRegister an app with an explicit domain. The host port is assigned automatically if omitted. The container port comes from schema.json; --container-port is the legacy fallback, defaulting to 3000. Then run uppr pull <name>.`,
   pull: `uppr pull <name|--all> [--ff]\nClone or fast-forward Git checkouts. --ff fetches and resets each checkout to its upstream branch, discarding local commits and tracked changes and removing untracked files. config/ and data/ are preserved. This does not build or start apps.`,
   domains: `uppr domains <app> <domain[,domain...]>\nExample: uppr domains api api.example.com,alt.example.com\nSet the app's domains in repos/<app>/schema.json. Run uppr install to apply routes. Point each public domain's DNS at the server IP shown by uppr ip.`,
   ip: `uppr ip\nPrint this server's public IPv4 address. Uses api.ipify.org and requires internet access; no launchpad is needed.`,
